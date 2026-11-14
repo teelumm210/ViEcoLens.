@@ -18,13 +18,18 @@
     }
 
     // Gọi generateContent, thử lần lượt các model. Trả về chuỗi văn bản của ứng viên đầu tiên.
-    async function request(body) {
+    // opts.deadlineMs: tổng thời gian tối đa cho cả chuỗi thử model (trò chuyện live cần trả lời nhanh, không chờ cả phút).
+    async function request(body, opts = {}) {
         let lastErr = null;
         let sentBody = body;
+        const startedAt = Date.now();
+        const deadline = opts.deadlineMs || 0;
 
         for (const model of MODELS) {
+            const left = deadline ? deadline - (Date.now() - startedAt) : TIMEOUT_MS;
+            if (left < 2500) { lastErr = lastErr || makeError('Gemini phản hồi quá lâu.', 'timeout'); break; }
             const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+            const timer = setTimeout(() => ctrl.abort(), Math.min(TIMEOUT_MS, left));
             try {
                 // key cá nhân -> gọi thẳng Google; không có -> qua Netlify Function (js/gemini-gateway.js)
                 const res = await window.ecoGeminiGateway.generateContent(model, sentBody, { signal: ctrl.signal });
@@ -95,12 +100,12 @@
         return parseJSON(text);
     }
 
-    async function chat({ system, contents, temperature = 0.7, maxOutputTokens = 1024 }) {
+    async function chat({ system, contents, temperature = 0.7, maxOutputTokens = 2048, deadlineMs = 0 }) {
         return request({
             systemInstruction: { parts: [{ text: system || '' }] },
             contents,
             generationConfig: { temperature, maxOutputTokens }
-        });
+        }, { deadlineMs });
     }
 
     window.ecoAI = { generateJSON, chat, parseJSON, hasKey: () => true };   // luôn có đường gọi: key cá nhân hoặc máy chủ

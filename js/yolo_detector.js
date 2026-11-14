@@ -183,10 +183,13 @@ const YoloDetector = {
     },
 
     _preprocess(img) {
-        const canvas = document.createElement('canvas');
-        canvas.width = this.inputSize;
-        canvas.height = this.inputSize;
-        const ctx = canvas.getContext('2d');
+        if (!this._pre) {
+            const c = document.createElement('canvas');
+            c.width = this.inputSize;
+            c.height = this.inputSize;
+            this._pre = { canvas: c, ctx: c.getContext('2d', { willReadFrequently: true }) };
+        }
+        const ctx = this._pre.ctx;
 
         const scale = Math.min(this.inputSize / img.width, this.inputSize / img.height);
         const newW = Math.round(img.width * scale);

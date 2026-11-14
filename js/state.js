@@ -408,3 +408,15 @@ const StateManager = {
 window.ecoState = StateManager;
  
 document.addEventListener('DOMContentLoaded', () => StateManager.init());
+
+// Điểm "độ thân thiện môi trường" CỐ ĐỊNH theo nhóm rác: cùng một nhóm luôn ra cùng một tỉ lệ %
+// (ở cả chế độ chụp lẫn Greeny Live), không còn để AI tự đoán mỗi lần một số khác nhau.
+window.ecoScore = (() => {
+    const BY_TAG = { 'RÁC TÁI CHẾ': 85, 'RÁC HỮU CƠ': 70, 'RÁC NGUY HIỂM': 15, 'RÁC VÔ CƠ': 50 };
+    const BY_GROUP = { tai_che: 85, huu_co: 70, nguy_hiem: 15, vo_co: 50 };
+    const norm = (t) => String(t || '').toUpperCase().replace(/\s+/g, ' ').trim();
+    return {
+        forTag: (tag) => BY_TAG[norm(tag)] ?? 50,
+        forGroup: (g) => BY_GROUP[g] ?? 50
+    };
+})();

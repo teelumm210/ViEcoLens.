@@ -14,7 +14,31 @@
     const TARGET_FRAME_MS = 120;        // nhịp vòng lặp phát hiện (nhanh hơn nếu máy kịp)
     const WORK_MAX = 640;               // cạnh dài tối đa của ảnh đưa vào YOLO / gửi Gemini
     const MAX_TRACKS = 12;
-    const TRACK = { minHits: 2, maxAgeMs: 700, alpha: 0.5, matchIou: 0.3 };
+    // minHits/showConf: chỉ hiện vật đã thấy ổn định qua >=3 khung và đủ chắc chắn -> bớt nhận sai thoáng qua.
+    // voteDecay: nhãn của mỗi vật được "bỏ phiếu" theo thời gian, nhãn mới phải vượt trội mới đổi (tránh nhảy chai <-> cốc).
+    const TRACK = { minHits: 3, maxAgeMs: 900, alpha: 0.4, matchIou: 0.3, crossIou: 0.5, showConf: 0.5, voteDecay: 0.75, switchRatio: 1.3 };
+    const MIN_DET_CONF = 0.45;          // bỏ phát hiện yếu ngay từ đầu
+    const MIN_AREA = 0.012;             // bỏ khung quá nhỏ (nhiễu), tính theo tỉ lệ diện tích khung hình
+    const MAX_AREA = 0.9;               // bỏ khung phủ gần hết khung hình (thường là nền)
+    const ASK_DEADLINE_MS = 18000;      // chờ Gemini tối đa ~18 giây rồi trả lời dự phòng
+    const MAX_SILENT_LISTENS = 4;       // im lặng 4 lượt liên tiếp thì tắt chế độ nghe để khỏi kêu bíp mãi
+
+    // Các lớp COCO không phải rác/đồ dùng cần phân loại (đồ nội thất, biển báo...) -> bỏ để khỏi gán nhầm "nhóm rác".
+    const LIVE_IGNORE = new Set([
+        'bicycle', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'skis', 'snowboard',
+        'kite', 'baseball bat', 'baseball glove', 'chair', 'couch', 'bed', 'dining table', 'toilet', 'sink',
+        'refrigerator', 'microwave', 'oven'
+    ]);
+
+    function keepDetection(d) {
+        if (!d || !d.bboxRel || LIVE_IGNORE.has(d.class)) return false;
+        if (d.confidence < MIN_DET_CONF) return false;
+        const area = d.bboxRel.width * d.bboxRel.height;
+        return area >= MIN_AREA && area <= MAX_AREA;
+    }
+
+    // Tỉ lệ % hiển thị = điểm cố định theo nhóm rác, dùng CHUNG với chế độ chụp ảnh.
+    const scoreOf = (group) => (window.ecoScore ? window.ecoScore.forGroup(group) : 50);
 
     // ---------- Nhóm rác gợi ý nhanh cho các lớp COCO (Gemini sẽ giải thích chi tiết khi được hỏi) ----------
     const GROUPS = {
@@ -52,7 +76,24 @@
         return union > 0 ? inter / union : 0;
     }
 
-    // Ghép phát hiện mới vào các track cũ (cùng lớp, IoU cao) để khung không nhấp nháy và nhãn ổn định.
+    // Cập nhật phiếu bầu nhãn của một vật; chỉ đổi nhãn hiển thị khi nhãn mới vượt trội rõ rệt.
+    function castVote(t, d, opts) {
+        for (const k of Object.keys(t.votes)) t.votes[k].score *= opts.voteDecay;
+        const v = t.votes[d.class] || (t.votes[d.class] = { score: 0, conf: d.confidence, classVi: d.classVi || d.class });
+        v.score += d.confidence;
+        v.conf = v.conf * (1 - opts.alpha) + d.confidence * opts.alpha;
+
+        let leader = t.class;
+        for (const k of Object.keys(t.votes)) if (t.votes[k].score > t.votes[leader].score) leader = k;
+        if (leader !== t.class && t.votes[leader].score > t.votes[t.class].score * opts.switchRatio) {
+            t.class = leader;
+            t.classVi = t.votes[leader].classVi;
+            t.group = groupOf(leader);
+        }
+        t.conf = t.votes[t.class].conf;
+    }
+
+    // Ghép phát hiện mới vào các track cũ (IoU cao) để khung không nhấp nháy và nhãn ổn định.
     function updateTracks(tracks, dets, now, opts = TRACK) {
         tracks.forEach((t) => { t._matched = false; });
 
@@ -60,11 +101,12 @@
             let best = null;
             let bestIou = 0;
             for (const t of tracks) {
-                if (t._matched || t.class !== d.class) continue;
+                if (t._matched) continue;
                 const v = iou(t.box, d.bboxRel);
-                if (v > bestIou) { bestIou = v; best = t; }
+                const need = t.class === d.class ? opts.matchIou : (opts.crossIou ?? opts.matchIou);
+                if (v >= need && v > bestIou) { bestIou = v; best = t; }
             }
-            if (best && bestIou >= opts.matchIou) {
+            if (best) {
                 const a = opts.alpha;
                 best._matched = true;
                 best.box = {
@@ -73,9 +115,9 @@
                     width: best.box.width * (1 - a) + d.bboxRel.width * a,
                     height: best.box.height * (1 - a) + d.bboxRel.height * a
                 };
-                best.conf = best.conf * (1 - a) + d.confidence * a;
                 best.hits++;
                 best.lastSeen = now;
+                castVote(best, d, opts);
             } else {
                 tracks.push({
                     id: ++nextTrackId,
@@ -83,6 +125,7 @@
                     classVi: d.classVi || d.class,
                     box: { ...d.bboxRel },
                     conf: d.confidence,
+                    votes: { [d.class]: { score: d.confidence, conf: d.confidence, classVi: d.classVi || d.class } },
                     hits: 1,
                     lastSeen: now,
                     group: groupOf(d.class),
@@ -94,7 +137,7 @@
     }
 
     const visibleTracks = (tracks, opts = TRACK) =>
-        tracks.filter((t) => t.hits >= opts.minHits).sort((a, b) => b.conf - a.conf).slice(0, MAX_TRACKS);
+        tracks.filter((t) => t.hits >= opts.minHits && t.conf >= (opts.showConf || 0)).sort((a, b) => b.conf - a.conf).slice(0, MAX_TRACKS);
 
     function positionOf(box) {
         const cx = box.x + box.width / 2;
@@ -106,7 +149,7 @@
         const list = visibleTracks(tracks);
         if (!list.length) return 'Máy chưa phát hiện được vật thể nào (hãy dựa vào ảnh nếu có).';
         return list.map((t) =>
-            `- ${t.classVi} (${positionOf(t.box)}, tin cậy ${Math.round(t.conf * 100)}%) → gợi ý nhóm: rác ${GROUPS[t.group].label}`
+            `- ${t.classVi} (${positionOf(t.box)}, máy chắc chắn ${Math.round(t.conf * 100)}%) → gợi ý nhóm: rác ${GROUPS[t.group].label}`
         ).join('\n');
     }
 
@@ -135,7 +178,11 @@
         askId: 0,
         work: null,
         selectedClass: null,          // lớp vật thể đang được chọn xem chi tiết
-        chipSig: ''                   // chữ ký danh sách nhãn (chỉ dựng lại khi thay đổi, để chạm không bị mất)
+        chipSig: '',                  // chữ ký danh sách nhãn (chỉ dựng lại khi thay đổi, để chạm không bị mất)
+        fails: 0,                     // số lần liên tiếp Gemini không trả lời được
+        silent: 0,                    // số lượt nghe liên tiếp không có tiếng nói
+        heard: false,                 // đã nhận được ít nhất một câu nói (để phân biệt "mất quyền micro" với "iOS đòi chạm lại")
+        speakTimer: null              // chốt chặn khi giọng đọc không báo "xong" (hay gặp trên điện thoại)
     };
 
     // ---------- Giao diện ----------
@@ -191,7 +238,7 @@
             return;
         }
         const t = list[0];
-        const conf = Math.round(Math.max(...list.map((x) => x.conf)) * 100);
+        const conf = scoreOf(t.group);
         const g = GROUPS[t.group];
         $('live-detail-name').textContent = list.length > 1 ? `${t.classVi} ×${list.length}` : t.classVi;
         const gl = $('live-detail-group');
@@ -280,7 +327,7 @@
             ctx.fill();
             ctx.stroke();
 
-            const label = `${t.classVi} ${Math.round(t.conf * 100)}%`;
+            const label = `${t.classVi} ${scoreOf(t.group)}%`;
             ctx.font = '700 13px Inter, sans-serif';
             const tw = ctx.measureText(label).width;
             const ly = Math.max(0, b.y - 24);
@@ -327,7 +374,7 @@
             if (video && video.videoWidth > 0 && video.readyState >= 2) {
                 if (S.detectorReady && window.yoloDetector) {
                     const dets = await window.yoloDetector.detectFrame(drawToWork(video));
-                    if (dets && S.running) S.tracks = updateTracks(S.tracks, dets.slice(0, 12), Date.now());
+                    if (dets && S.running) S.tracks = updateTracks(S.tracks, dets.filter(keepDetection).slice(0, 12), Date.now());
                 }
                 render();
                 renderChips();
@@ -395,6 +442,8 @@
         S.voice = false;
         S.askId++;
         clearTimeout(S.loopTimer);
+        clearTimeout(S.speakTimer);
+        S.fails = 0; S.silent = 0; S.heard = false;
         if (S.rec) { try { S.rec.abort(); } catch (e) { /* bỏ qua */ } S.rec = null; }
         window.ecoVoice?.stop();
         if (S.stream) { S.stream.getTracks().forEach((t) => t.stop()); S.stream = null; }
@@ -428,11 +477,43 @@
             'Vật thể đang thấy:\n' + summarize(S.tracks);
     }
 
+    // Trả lời dự phòng bằng dữ liệu nhận diện trên máy khi Gemini không phản hồi (mạng yếu, quá tải...).
+    function localAnswer() {
+        const list = visibleTracks(S.tracks);
+        if (!list.length) return 'Mình chưa nhìn thấy vật nào rõ ràng. Bạn đưa camera lại gần vật cần xem nhé.';
+        const names = [...new Set(list.map((t) => t.classVi))].slice(0, 4).join(', ');
+        const first = list[0];
+        return `Mình đang thấy ${names}. ${first.classVi}: ${GROUP_TIP[first.group]}`;
+    }
+
+    // Hiện chữ + đọc to câu trả lời, rồi chuyển sang lượt kế tiếp.
+    function deliver(my, reply, ok) {
+        setBot(clip(reply.replace(/[*_`#>]+/g, ' '), 600));
+        clearTimeout(S.speakTimer);
+        if (S.speakReplies && window.ecoVoice) {
+            setState('speaking');
+            // Điện thoại đôi khi không bắn sự kiện "đọc xong" -> tự chuyển lượt sau thời gian hợp lý.
+            const ms = Math.min(60000, 8000 + reply.length * 130);
+            S.speakTimer = setTimeout(() => {
+                if (my !== S.askId || !S.running || S.state !== 'speaking') return;
+                window.ecoVoice?.stop();
+                afterReply(my, ok);
+            }, ms);
+            window.ecoVoice.speak(reply, 'live-screen', {
+                onDone: () => { clearTimeout(S.speakTimer); afterReply(my, ok); }
+            });
+        } else {
+            afterReply(my, ok);
+        }
+    }
+
     async function ask(rawText) {
         const text = clip(rawText, 300);
         if (!text || !S.running) return;
         const ai = window.ecoAI;
         const my = ++S.askId;
+        clearTimeout(S.speakTimer);
+        S.silent = 0;
 
         setUser(text);
         setState('thinking');
@@ -446,42 +527,47 @@
         }
 
         try {
-            const reply = await ai.chat({
-                system: buildSystem(),
-                contents: [...S.history.slice(-6), { role: 'user', parts }],
-                temperature: 0.6
-            });
+            // Có hạn chót cứng: dù mạng điện thoại chậm, vài chục giây sau vẫn có câu trả lời (không treo ở "Đang nghĩ…").
+            const reply = await Promise.race([
+                ai.chat({
+                    system: buildSystem(),
+                    contents: [...S.history.slice(-6), { role: 'user', parts }],
+                    temperature: 0.6,
+                    deadlineMs: ASK_DEADLINE_MS
+                }),
+                new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('timeout'), { code: 'timeout' })), ASK_DEADLINE_MS + 4000))
+            ]);
             if (my !== S.askId || !S.running) return;               // đã bị ngắt hoặc thoát màn hình
 
+            S.fails = 0;
             S.history.push({ role: 'user', parts: [{ text }] }, { role: 'model', parts: [{ text: reply }] });
             S.history = S.history.slice(-12);
-
-            const shown = clip(reply.replace(/[*_`#>]+/g, ' '), 600);
-            setBot(shown);
-
-            if (S.speakReplies && window.ecoVoice) {
-                setState('speaking');
-                window.ecoVoice.speak(reply, 'live-screen', { onDone: () => afterReply(my, true) });
-            } else {
-                afterReply(my, true);
-            }
+            deliver(my, reply, true);
         } catch (e) {
-            if (my !== S.askId) return;
+            if (my !== S.askId || !S.running) return;
             console.warn('[Live] Gemini lỗi:', e);
-            const msg = e.code === 'nokey' ? 'Chưa có API Key Gemini để trò chuyện.'
-                : e.code === 'badkey' ? 'API Key Gemini không hợp lệ.'
-                    : e.code === 'quota' ? 'Greeny đang hết hạn mức AI, hãy thử lại sau ít phút.'
-                        : 'Greeny chưa trả lời được, bạn thử lại nhé.';
-            setBot(msg);
-            S.voice = false;                                         // lỗi thì dừng chế độ rảnh tay để không lặp vô hạn
-            setState('idle');
+
+            if (e.code === 'nokey' || e.code === 'badkey') {         // lỗi cấu hình: không thể tự khỏi -> dừng hẳn
+                setBot(e.code === 'nokey' ? 'Chưa có API Key Gemini để trò chuyện.' : 'API Key Gemini không hợp lệ.');
+                S.voice = false;
+                setState('idle');
+                return;
+            }
+
+            // Lỗi tạm thời (quá tải, mạng chậm...): vẫn trả lời bằng dữ liệu trên máy để người dùng không bị im lặng.
+            S.fails++;
+            const why = e.code === 'quota' ? 'Greeny đang hết hạn mức AI nên mình trả lời nhanh bằng dữ liệu trên máy. '
+                : 'Greeny đang bận nên mình trả lời nhanh bằng dữ liệu trên máy. ';
+            if (S.fails >= 3) S.voice = false;                       // lỗi liên tục thì thôi chế độ rảnh tay để không lặp vô hạn
+            deliver(my, why + localAnswer(), S.fails < 3);
         }
     }
 
     // Sau khi Greeny trả lời xong: rảnh tay thì nghe tiếp, không thì về trạng thái chờ.
     function afterReply(id, ok) {
         if (id !== S.askId || !S.running) return;
-        if (S.voice && ok) beginListening();
+        clearTimeout(S.speakTimer);
+        if (S.voice && ok) setTimeout(() => { if (id === S.askId && S.voice && S.running && S.state !== 'listening') beginListening(); }, 350);
         else setState('idle');
     }
 
@@ -529,23 +615,36 @@
         setUser('');
         S.rec = listenOnce({
             onInterim: (t) => setUser(t, true),
-            onFinal: (t) => { ask(t); },
+            onFinal: (t) => { S.heard = true; S.silent = 0; ask(t); },
             onError: (e) => {
-                if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'audio-capture' || e.error === 'unsupported') {
+                if (e.error === 'unsupported') {
                     S.voice = false;
-                    setBot(e.error === 'unsupported'
-                        ? 'Trình duyệt chưa hỗ trợ nhận dạng giọng nói. Hãy dùng Chrome/Edge hoặc gõ câu hỏi bên dưới.'
-                        : 'Chưa cấp quyền micro cho trang này.');
+                    setBot('Trình duyệt chưa hỗ trợ nhận dạng giọng nói. Hãy dùng Chrome/Edge hoặc gõ câu hỏi bên dưới.');
+                } else if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+                    S.voice = false;
+                    // Safari trên iPhone chỉ cho bật mic khi người dùng chạm -> sau câu trả lời cần chạm micro lại.
+                    setBot(S.heard ? 'Chạm vào micro để nói tiếp nhé.' : 'Chưa cấp quyền micro cho trang này (hoặc trình duyệt không cho nhận giọng nói). Bạn có thể gõ câu hỏi bên dưới.');
+                } else if (e.error === 'audio-capture') {
+                    S.voice = false;
+                    setBot('Không mở được micro. Hãy kiểm tra quyền micro rồi thử lại, hoặc gõ câu hỏi bên dưới.');
                 } else if (e.error === 'network') {
                     S.voice = false;
-                    setBot('Lỗi mạng khi nhận dạng giọng nói.');
+                    setBot('Lỗi mạng khi nhận dạng giọng nói. Bạn thử lại hoặc gõ câu hỏi bên dưới nhé.');
                 }
             },
             onEnd: () => {
                 S.rec = null;
-                // im lặng / chưa nói gì -> nghe tiếp (chỉ khi vẫn đang ở trạng thái nghe)
-                if (S.voice && S.running && S.state === 'listening') setTimeout(beginListening, 250);
-                else if (!S.voice && S.state === 'listening') setState('idle');
+                if (S.voice && S.running && S.state === 'listening') {
+                    // im lặng / chưa nói gì -> nghe tiếp, nhưng quá nhiều lượt im lặng thì tạm dừng (đỡ bíp liên tục trên Android)
+                    if (++S.silent >= MAX_SILENT_LISTENS) {
+                        S.voice = false;
+                        S.silent = 0;
+                        setBot('Mình chưa nghe thấy gì nên tạm dừng nghe. Chạm vào micro để nói tiếp nhé.');
+                        setState('idle');
+                        return;
+                    }
+                    setTimeout(beginListening, 400);
+                } else if (!S.voice && S.state === 'listening') setState('idle');
             }
         });
         if (!S.rec && S.state === 'listening') { S.voice = false; setState('idle'); }
@@ -554,6 +653,7 @@
     function stopVoiceMode() {
         S.voice = false;
         S.askId++;
+        clearTimeout(S.speakTimer);
         if (S.rec) { try { S.rec.abort(); } catch (e) { /* bỏ qua */ } S.rec = null; }
         window.ecoVoice?.stop();
         setState('idle');
@@ -563,12 +663,15 @@
         if (!S.running) return;
         if (!S.voice) {
             S.voice = true;
+            S.silent = 0;
+            S.fails = 0;
             window.ecoVoice?.stop();
             beginListening();
             return;
         }
         if (S.state === 'speaking') {                               // ngắt lời Greeny, chuyển sang nghe
             S.askId++;
+            clearTimeout(S.speakTimer);
             window.ecoVoice?.stop();
             beginListening();
             return;

@@ -152,14 +152,7 @@ const GeminiManager = {
         r.description = r.description || 'Không có mô tả chi tiết về tác động môi trường.';
         r.suggestion = r.suggestion || 'Hãy phân loại và bỏ rác đúng nơi quy định để bảo vệ môi trường.';
 
-        r.percentage = parseFloat(String(r.percentage).replace(/[^0-9.]/g, ''));
-        if (isNaN(r.percentage)) {
-            if (r.tag === 'RÁC TÁI CHẾ') r.percentage = 85;
-            else if (r.tag === 'RÁC HỮU CƠ') r.percentage = 70;
-            else if (r.tag === 'RÁC NGUY HIỂM') r.percentage = 15;
-            else r.percentage = 50;
-        }
-        r.percentage = Math.max(0, Math.min(100, Math.round(r.percentage)));
+        r.percentage = window.ecoScore.forTag(r.tag);   // cố định theo nhóm rác
 
         const b = r.boundingBox;
         let box = null;
@@ -388,14 +381,7 @@ const GeminiManager = {
             resultJson.description = resultJson.description || 'Không có mô tả chi tiết về tác động môi trường.';
             resultJson.suggestion = resultJson.suggestion || 'Hãy phân loại và bỏ rác đúng nơi quy định để bảo vệ môi trường.';
 
-            resultJson.percentage = parseFloat(String(resultJson.percentage).replace(/[^0-9.]/g, ''));
-            if (isNaN(resultJson.percentage)) {
-                if (resultJson.tag === 'RÁC TÁI CHẾ') resultJson.percentage = 85;
-                else if (resultJson.tag === 'RÁC HỮU CƠ') resultJson.percentage = 70;
-                else if (resultJson.tag === 'RÁC NGUY HIỂM') resultJson.percentage = 15;
-                else resultJson.percentage = 50;
-            }
-            resultJson.percentage = Math.max(0, Math.min(100, Math.round(resultJson.percentage)));
+            resultJson.percentage = window.ecoScore.forTag(resultJson.tag);   // cố định theo nhóm rác
 
             resultJson.boundingBox = best.bboxRel;
             resultJson.yoloClass = best.class;
@@ -489,14 +475,7 @@ const GeminiManager = {
             resultJson.description = resultJson.description || 'Không có mô tả chi tiết về tác động môi trường.';
             resultJson.suggestion = resultJson.suggestion || 'Hãy phân loại và bỏ rác đúng nơi quy định để bảo vệ môi trường.';
 
-            resultJson.percentage = parseFloat(String(resultJson.percentage).replace(/[^0-9.]/g, ''));
-            if (isNaN(resultJson.percentage)) {
-                if (resultJson.tag === 'RÁC TÁI CHẾ') resultJson.percentage = 85;
-                else if (resultJson.tag === 'RÁC HỮU CƠ') resultJson.percentage = 70;
-                else if (resultJson.tag === 'RÁC NGUY HIỂM') resultJson.percentage = 15;
-                else resultJson.percentage = 50;
-            }
-            resultJson.percentage = Math.max(0, Math.min(100, Math.round(resultJson.percentage)));
+            resultJson.percentage = window.ecoScore.forTag(resultJson.tag);   // cố định theo nhóm rác
 
             this._applyTagColors(resultJson);
 
