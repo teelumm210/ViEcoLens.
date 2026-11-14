@@ -1,8 +1,12 @@
 /**
  * ViGreen - voice.js
+<<<<<<< HEAD
  * ĐỌC TO tiếng Việt (text-to-speech). Module này CHỈ lo phần đọc.
  *   - Giọng nói -> chữ ở ô chat: js/stt.js (window.ecoSTT)
  *   - Voice chat realtime (Greeny Live): js/live.js (có bộ nhận giọng riêng)
+=======
+ * Giọng nói cho app: nhập chat bằng mic (SpeechRecognition) + đọc to tiếng Việt.
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
  *
  * Đọc to có 2 "động cơ":
  *   - device : giọng tiếng Việt có sẵn trong thiết bị (speechSynthesis).
@@ -10,11 +14,18 @@
  * Chế độ "auto": có giọng tiếng Việt trên thiết bị thì dùng, không có thì dùng Gemini.
  * KHÔNG BAO GIỜ đọc tiếng Việt bằng giọng của ngôn ngữ khác (nguyên nhân gây đọc sai/khó nghe).
  *
+<<<<<<< HEAD
  * Yêu cầu trong index.html: #voice-speak-btn, mục #voice-settings
  * và <script src="js/voice.js"> (sau state.js, trước gemini.js).
  * gemini.js gọi ecoVoice.speakReply() / speakScanResult() / speakCreative();
  * app.js gọi ecoVoice.stop() trong navigateTo().
  * Khi bắt đầu đọc, module phát sự kiện 'eco:tts-start' để stt.js tự ngắt mic.
+=======
+ * Yêu cầu trong index.html: #voice-mic-btn, #voice-speak-btn, mục #voice-settings
+ * và <script src="js/voice.js"> (sau state.js, trước gemini.js).
+ * gemini.js gọi ecoVoice.speakReply() / ecoVoice.speakScanResult();
+ * app.js gọi ecoVoice.stop() / cancelListening() trong navigateTo().
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
  */
 (() => {
     'use strict';
@@ -23,6 +34,10 @@
     const LS = {
         auto: 'eco_voice_auto',
         rate: 'eco_voice_rate',
+<<<<<<< HEAD
+=======
+        send: 'eco_voice_autosend',
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
         engine: 'eco_voice_engine',
         device: 'eco_voice_device',
         gvoice: 'eco_voice_gvoice'
@@ -36,6 +51,10 @@
     const settings = (window.ecoState && window.ecoState.voice) || {
         autoSpeak: store.get(LS.auto) === '1',
         rate: parseFloat(store.get(LS.rate)) || 0.9,
+<<<<<<< HEAD
+=======
+        autoSend: store.get(LS.send) !== '0',
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
         engine: store.get(LS.engine) || 'auto',          // auto | device | gemini
         deviceVoice: store.get(LS.device) || '',         // tên giọng thiết bị người dùng chọn ('' = tự chọn)
         geminiVoice: store.get(LS.gvoice) || 'Kore'
@@ -45,11 +64,24 @@
     if (settings.deviceVoice == null) settings.deviceVoice = '';
     if (!settings.geminiVoice) settings.geminiVoice = 'Kore';
 
+<<<<<<< HEAD
     const synth = window.speechSynthesis;
 
     let speaking = false;
     let speakId = 0;               // mỗi lần đọc/dừng tăng 1 để bỏ qua sự kiện của lần đọc cũ
     let currentSource = null;      // 'chat-screen' | 'scan-screen' | 'live-screen' | null
+=======
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const synth = window.speechSynthesis;
+
+    let recognition = null;
+    let listening = false;
+    let speaking = false;
+    let speakId = 0;               // mỗi lần đọc/dừng tăng 1 để bỏ qua sự kiện của lần đọc cũ
+    let currentSource = null;      // 'chat-screen' | 'scan-screen' | null
+    let abortRequested = false;    // true khi hủy nghe (chuyển màn hình) -> không tự gửi
+    let voiceInitiated = false;    // câu hỏi vừa rồi được nói bằng mic -> trả lời sẽ được đọc
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
     let currentUtterance = null;   // GIỮ tham chiếu: Chrome có thể "thu rác" utterance làm tiếng bị cụt giữa chừng
     let startTimer = null;         // hẹn giờ bắt đầu đọc (chờ sau cancel)
     let watchdog = null;           // phòng khi trình duyệt không bắn sự kiện onend
@@ -252,6 +284,16 @@
     const audioCache = new Map();                                       // "giọng|văn bản" -> Promise<Blob>
     const ttsAudio = new Audio();                                       // MỘT phần tử dùng lại (iOS chỉ cần "mở khóa" một lần)
 
+<<<<<<< HEAD
+=======
+    function geminiKey() {
+        try {
+            if (typeof getApiKey === 'function') return getApiKey();
+        } catch (e) { /* bỏ qua */ }
+        return store.get('eco_gemini_api_key');
+    }
+
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
     function geminiBody(model, text) {
         const voice = settings.geminiVoice || 'Kore';
         const legacy = /3\.1|2\.5/.test(model);                         // định dạng giọng của model đời cũ
@@ -293,6 +335,12 @@
     }
 
     async function fetchGeminiAudio(text) {
+<<<<<<< HEAD
+=======
+        const key = geminiKey();
+        if (!key) { const e = new Error('Thiếu API Key Gemini'); e.code = 'nokey'; throw e; }
+
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
         const models = workingModel ? [workingModel, ...GEMINI_TTS_MODELS.filter((m) => m !== workingModel)] : GEMINI_TTS_MODELS;
         let lastStatus = 0;
 
@@ -300,6 +348,7 @@
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), 25000);
             try {
+<<<<<<< HEAD
                 const res = await window.ecoGeminiGateway.generateContent(model, geminiBody(model, text), { signal: ctrl.signal });
                 if (!res.ok) {
                     lastStatus = res.status;
@@ -307,6 +356,16 @@
                         const eb = await res.json().catch(() => null);
                         if (window.ecoGeminiGateway.isNoKeyError(eb)) { const e = new Error('Máy chủ chưa có API Key Gemini'); e.code = 'nokey'; throw e; }
                     }
+=======
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+                    body: JSON.stringify(geminiBody(model, text)),
+                    signal: ctrl.signal
+                });
+                if (!res.ok) {
+                    lastStatus = res.status;
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
                     if (res.status === 401 || res.status === 403) { const e = new Error('API Key không hợp lệ'); e.code = 'badkey'; throw e; }
                     continue;                                            // 400/404/429/5xx -> thử model kế tiếp
                 }
@@ -316,7 +375,11 @@
                 workingModel = model;
                 return audioPartToBlob(part.inlineData || part.inline_data);
             } catch (e) {
+<<<<<<< HEAD
                 if (e.code === 'badkey' || e.code === 'nokey') throw e;
+=======
+                if (e.code === 'badkey') throw e;
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
                 lastStatus = lastStatus || -1;
             } finally {
                 clearTimeout(timer);
@@ -413,8 +476,12 @@
 
         const wasActive = !!(synth && (synth.speaking || synth.pending));
         stopSpeaking();
+<<<<<<< HEAD
         // báo cho module nhập giọng nói (stt.js) tự ngắt mic, tránh mic thu lại tiếng loa
         try { document.dispatchEvent(new CustomEvent('eco:tts-start')); } catch (e) { /* bỏ qua */ }
+=======
+        if (listening) cancelListening();
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
 
         const engine = resolveEngine();
         if (engine === 'none') { noViVoiceHint(); if (opts && opts.onDone) opts.onDone(); return; }
@@ -463,7 +530,134 @@
         } catch (e) { /* bỏ qua */ }
     }
 
+<<<<<<< HEAD
     // ---------- Giao diện (phần tử đã có sẵn trong index.html) ----------
+=======
+    // ---------- Nhận dạng giọng nói (STT) ----------
+    function startListening() {
+        if (!SR) {
+            toast('Trình duyệt chưa hỗ trợ nhận dạng giọng nói. Hãy dùng Chrome hoặc Edge.');
+            return;
+        }
+        const input = document.getElementById('chat-input');
+        if (!input) return;
+
+        stopSpeaking();
+        abortRequested = false;
+
+        recognition = new SR();
+        recognition.lang = 'vi-VN';
+        recognition.interimResults = true;
+        recognition.continuous = false;
+        recognition.maxAlternatives = 1;
+
+        let transcript = '';
+
+        recognition.onstart = () => { listening = true; refreshUI(); };
+
+        recognition.onresult = (e) => {
+            transcript = Array.from(e.results).map((r) => r[0].transcript).join(' ').trim();
+            input.value = transcript;
+        };
+
+        recognition.onerror = (e) => {
+            if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+                toast('Bạn chưa cấp quyền micro cho trang này.');
+            } else if (e.error === 'no-speech') {
+                toast('Không nghe thấy gì, hãy thử lại nhé.');
+            } else if (e.error === 'network') {
+                toast('Lỗi mạng khi nhận dạng giọng nói.');
+            } else if (e.error !== 'aborted') {
+                toast('Không nhận dạng được: ' + e.error);
+            }
+        };
+
+        recognition.onend = () => {
+            listening = false;
+            recognition = null;
+            refreshUI();
+            if (!transcript || abortRequested) { abortRequested = false; return; }
+            if (settings.autoSend) {
+                voiceInitiated = true;
+                document.getElementById('send-btn')?.click();
+            } else {
+                input.focus();
+            }
+        };
+
+        try {
+            recognition.start();
+        } catch (err) {
+            console.warn('[Voice] start lỗi:', err);
+        }
+    }
+
+    function stopListening() {
+        if (recognition) {
+            try { recognition.stop(); } catch (e) { /* bỏ qua */ }
+        }
+    }
+
+    // Hủy nghe: dừng ngay và KHÔNG gửi phần chữ đang nhận dạng dở.
+    function cancelListening() {
+        if (!recognition) return;
+        abortRequested = true;
+        try { recognition.abort(); } catch (e) { /* bỏ qua */ }
+    }
+
+    function toggleListening() {
+        listening ? stopListening() : startListening();
+    }
+
+    // Nghe MỘT câu (không gắn với ô chat) — dùng cho trò chuyện rảnh tay ở Greeny Live.
+    // Trả về { stop(), abort() } hoặc null nếu không bắt đầu được.
+    function listenOnce({ onInterim, onFinal, onEnd, onError } = {}) {
+        if (!SR) { if (onError) onError({ error: 'unsupported' }); if (onEnd) onEnd(); return null; }
+        const rec = new SR();
+        rec.lang = 'vi-VN';
+        rec.interimResults = true;
+        rec.continuous = false;
+        rec.maxAlternatives = 1;
+
+        let transcript = '';
+        let aborted = false;
+
+        rec.onresult = (e) => {
+            transcript = Array.from(e.results).map((r) => r[0].transcript).join(' ').replace(/\s+/g, ' ').trim();
+            if (onInterim) onInterim(transcript);
+        };
+        rec.onerror = (e) => { if (e.error !== 'aborted' && onError) onError(e); };
+        rec.onend = () => {
+            if (transcript && !aborted && onFinal) onFinal(transcript);
+            if (onEnd) onEnd();
+        };
+
+        try {
+            rec.start();
+        } catch (err) {
+            if (onError) onError({ error: 'start' });
+            if (onEnd) onEnd();
+            return null;
+        }
+        return {
+            stop() { try { rec.stop(); } catch (e) { /* bỏ qua */ } },
+            abort() { aborted = true; try { rec.abort(); } catch (e) { /* bỏ qua */ } }
+        };
+    }
+
+    // ---------- Giao diện (phần tử đã có sẵn trong index.html) ----------
+    function bindMicButton() {
+        const btn = document.getElementById('voice-mic-btn');
+        if (!btn || btn.dataset.voiceBound) return;
+        btn.dataset.voiceBound = '1';
+        btn.addEventListener('click', toggleListening);
+        if (!SR) {
+            btn.style.opacity = '0.45';
+            btn.title = 'Trình duyệt chưa hỗ trợ nhận dạng giọng nói';
+        }
+    }
+
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
     function bindSpeakButton() {
         const btn = document.getElementById('voice-speak-btn');
         if (!btn || btn.dataset.voiceBound) return;
@@ -508,16 +702,28 @@
 
     function bindSettings() {
         const auto = document.getElementById('voice-auto-toggle');
+<<<<<<< HEAD
+=======
+        const send = document.getElementById('voice-send-toggle');
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
         const rate = document.getElementById('voice-rate');
         const rateVal = document.getElementById('voice-rate-val');
         const engine = document.getElementById('voice-engine');
         const device = document.getElementById('voice-device');
         const gvoice = document.getElementById('voice-gemini-voice');
         const test = document.getElementById('voice-test-btn');
+<<<<<<< HEAD
         if (!auto || !rate || auto.dataset.voiceBound) return;
         auto.dataset.voiceBound = '1';
 
         auto.checked = settings.autoSpeak;
+=======
+        if (!auto || !send || !rate || auto.dataset.voiceBound) return;
+        auto.dataset.voiceBound = '1';
+
+        auto.checked = settings.autoSpeak;
+        send.checked = settings.autoSend;
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
         rate.value = settings.rate;
         if (rateVal) rateVal.textContent = (settings.rate || 1).toFixed(1) + 'x';
         if (engine) engine.value = settings.engine;
@@ -530,6 +736,13 @@
             store.set(LS.auto, auto.checked ? '1' : '0');
             if (!auto.checked) stopSpeaking();
         });
+<<<<<<< HEAD
+=======
+        send.addEventListener('change', () => {
+            settings.autoSend = send.checked;
+            store.set(LS.send, send.checked ? '1' : '0');
+        });
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
         rate.addEventListener('input', () => {
             settings.rate = parseFloat(rate.value) || 1;
             if (rateVal) rateVal.textContent = settings.rate.toFixed(1) + 'x';
@@ -556,12 +769,17 @@
     }
 
     function refreshUI() {
+<<<<<<< HEAD
+=======
+        document.getElementById('voice-mic-btn')?.classList.toggle('listening', listening);
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
         document.getElementById('voice-speak-btn')?.classList.toggle('speaking', speaking && currentSource === 'scan-screen');
         const test = document.getElementById('voice-test-btn');
         if (test) test.textContent = speaking && currentSource === null ? 'Dừng' : 'Nghe thử';
     }
 
     // ---------- Gắn vào luồng sẵn có của app ----------
+<<<<<<< HEAD
     const $ = (id) => document.getElementById(id);
     const textOf = (el) => (el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '');
     const asSentence = (t) => {
@@ -632,10 +850,25 @@
     // Đọc câu trả lời chat CHỈ khi bật "Tự động đọc" (nhập giọng nói thành chữ không còn tự đọc nữa).
     function speakReply(text) {
         if (settings.autoSpeak) speak(text, 'chat-screen');
+=======
+    function buildScanText() {
+        const name = document.getElementById('item-name')?.textContent || '';
+        const tag = document.getElementById('item-tag')?.textContent || '';
+        const sug = document.getElementById('ai-suggestion')?.innerHTML || '';   // giữ HTML để cleanText ngắt ý
+        return composeScan(name, tag, sug);
+    }
+
+    // gemini.js gọi trực tiếp hai hàm này (setupChat và updateResultUI).
+    function speakReply(text) {
+        const byVoice = voiceInitiated;      // câu hỏi vừa được nói bằng mic
+        voiceInitiated = false;
+        if (settings.autoSpeak || byVoice) speak(text, 'chat-screen');
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
     }
 
     function speakScanResult(result) {
         if (!settings.autoSpeak || !result) return;
+<<<<<<< HEAD
         speak(composeAll(result), 'scan-screen');
     }
 
@@ -647,6 +880,13 @@
     }
 
     function init() {
+=======
+        speak(composeScan(result.name, result.tag, result.suggestion), 'scan-screen');
+    }
+
+    function init() {
+        bindMicButton();
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
         bindSpeakButton();
         bindSettings();
 
@@ -660,7 +900,11 @@
             }, 400);
         }
 
+<<<<<<< HEAD
         window.addEventListener('pagehide', () => { stopSpeaking(); });
+=======
+        window.addEventListener('pagehide', () => { stopSpeaking(); cancelListening(); });
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
 
         const events = ['pointerdown', 'keydown', 'touchend'];
         const unlockOnce = () => {
@@ -681,10 +925,22 @@
         speak,
         speakReply,
         speakScanResult,
+<<<<<<< HEAD
         speakCreative,
         stop: stopSpeaking,
         settings,
         get isSpeaking() { return speaking; },
         get isSupported() { return { tts: !!synth, viVoice: !!getDeviceVoice() }; }
+=======
+        stop: stopSpeaking,
+        startListening,
+        stopListening,
+        cancelListening,
+        toggleListening,
+        listenOnce,
+        settings,
+        get isSpeaking() { return speaking; },
+        get isSupported() { return { stt: !!SR, tts: !!synth, viVoice: !!getDeviceVoice() }; }
+>>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
     };
 })();
