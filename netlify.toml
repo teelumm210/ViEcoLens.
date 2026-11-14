@@ -1,8 +1,5 @@
 [build]
   publish = "."
 
-<<<<<<< HEAD
 [functions]
   directory = "netlify/functions"
-=======
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e

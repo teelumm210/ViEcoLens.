@@ -7,19 +7,10 @@
 (() => {
     'use strict';
 
-    const MODELS = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'];
+    // Thứ tự giống gemini.js: model nhanh còn được cấp trước, model cũ (2.0/2.5, có thể đã ngừng) để cuối.
+    const MODELS = ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash'];
     const TIMEOUT_MS = 30000;
 
-<<<<<<< HEAD
-=======
-    function apiKey() {
-        try {
-            if (typeof getApiKey === 'function') return getApiKey();
-        } catch (e) { /* bỏ qua */ }
-        try { return localStorage.getItem('eco_gemini_api_key'); } catch (e) { return null; }
-    }
-
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
     function makeError(message, code) {
         const err = new Error(message);
         err.code = code;
@@ -28,12 +19,6 @@
 
     // Gọi generateContent, thử lần lượt các model. Trả về chuỗi văn bản của ứng viên đầu tiên.
     async function request(body) {
-<<<<<<< HEAD
-=======
-        const key = apiKey();
-        if (!key) throw makeError('Chưa có API Key Gemini.', 'nokey');
-
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
         let lastErr = null;
         let sentBody = body;
 
@@ -41,27 +26,15 @@
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
             try {
-<<<<<<< HEAD
                 // key cá nhân -> gọi thẳng Google; không có -> qua Netlify Function (js/gemini-gateway.js)
                 const res = await window.ecoGeminiGateway.generateContent(model, sentBody, { signal: ctrl.signal });
-=======
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-                    body: JSON.stringify(sentBody),
-                    signal: ctrl.signal
-                });
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
 
                 if (!res.ok) {
                     const errBody = await res.json().catch(() => ({}));
                     const msg = errBody.error?.message || `HTTP ${res.status}`;
 
-<<<<<<< HEAD
                     if (window.ecoGeminiGateway.isNoKeyError(errBody)) throw makeError('Máy chủ chưa có API Key Gemini.', 'nokey');
 
-=======
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
                     if (res.status === 401 || res.status === 403 || /api key/i.test(msg)) {
                         throw makeError('API Key Gemini không hợp lệ.', 'badkey');
                     }
@@ -84,11 +57,7 @@
                 if (!text) { lastErr = makeError('Gemini không trả về nội dung.', 'empty'); continue; }
                 return text;
             } catch (e) {
-<<<<<<< HEAD
                 if (e.code === 'badkey' || e.code === 'nokey') throw e;
-=======
-                if (e.code === 'badkey') throw e;
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
                 lastErr = e.name === 'AbortError' ? makeError('Gemini phản hồi quá lâu.', 'timeout') : e;
             } finally {
                 clearTimeout(timer);
@@ -134,9 +103,5 @@
         });
     }
 
-<<<<<<< HEAD
     window.ecoAI = { generateJSON, chat, parseJSON, hasKey: () => true };   // luôn có đường gọi: key cá nhân hoặc máy chủ
-=======
-    window.ecoAI = { generateJSON, chat, parseJSON, hasKey: () => !!apiKey() };
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
 })();

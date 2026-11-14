@@ -3,12 +3,9 @@
 //   camera -> YOLO (ONNX, chạy trên máy) -> theo dõi vật thể ổn định -> khung + nhãn + nhóm rác gợi ý
 //   micro  -> nhận dạng tiếng Việt -> Gemini (kèm danh sách vật thể + khung hình hiện tại) -> đọc to câu trả lời
 //
-<<<<<<< HEAD
 // VOICE CHAT REALTIME là chức năng RIÊNG, độc lập với "giọng nói -> chữ" ở ô chat (js/stt.js):
 // module này tự có bộ nhận dạng giọng nói (listenOnce bên dưới); chỉ dùng ecoVoice để ĐỌC câu trả lời.
 //
-=======
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
 // Đây là chuỗi "gần realtime" (phát hiện ~3-8 khung/giây tùy máy; hội thoại theo lượt nói), không dùng Gemini Live WebSocket.
 // Khung hình chỉ được gửi cho Gemini khi bạn hỏi (và có thể tắt bằng nút con mắt), không gửi liên tục.
 (() => {
@@ -436,7 +433,6 @@
         else setState('idle');
     }
 
-<<<<<<< HEAD
     // Nghe MỘT câu bằng SpeechRecognition riêng của Greeny Live (không dùng chung với ô chat).
     // Trả về { stop(), abort() } hoặc null nếu không bắt đầu được.
     function listenOnce({ onInterim, onFinal, onEnd, onError } = {}) {
@@ -480,16 +476,6 @@
         setState('listening');
         setUser('');
         S.rec = listenOnce({
-=======
-    function beginListening() {
-        if (!S.voice || !S.running) return;
-        const voice = window.ecoVoice;
-        if (!voice || !voice.listenOnce) { S.voice = false; setState('idle'); return; }
-
-        setState('listening');
-        setUser('');
-        S.rec = voice.listenOnce({
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
             onInterim: (t) => setUser(t, true),
             onFinal: (t) => { ask(t); },
             onError: (e) => {

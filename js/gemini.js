@@ -1,9 +1,5 @@
 
-<<<<<<< HEAD
 // Không còn API Key mặc định trong mã nguồn: key hệ thống nằm trên máy chủ (Netlify Function, xem js/gemini-gateway.js).
-=======
-const FALLBACK_API_KEY = "AIzaSyA_GdRaO-AqQtRI25qK3RKmOOimIKQ84SY";
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
 
 const VISION_SYSTEM_INSTRUCTION = `Bạn là chuyên gia phân loại rác thông minh. Hãy tập trung vào vật thể nằm ở GIỮA khung hình (vật mà người dùng đang hướng camera vào). Bỏ qua các vật nền hoặc vật ở rìa ảnh. Bắt buộc phải dự đoán tên một vật thể cụ thể, KHÔNG trả về "vật thể không xác định" hay "không rõ".
 Trả về JSON thuần (không markdown) theo cấu trúc:
@@ -19,14 +15,9 @@ const DIY_SYSTEM_INSTRUCTION = `Gợi ý một ý tưởng tái chế sáng tạ
 [{"title":"Tên ý tưởng","emoji":"emoji","difficulty":"easy|medium|hard","steps":["Bước 1","Bước 2"]}]
 Mỗi ý tưởng 2-3 bước, thực tế, tiếng Việt.`;
 
-<<<<<<< HEAD
 // Chỉ trả về key CÁ NHÂN người dùng tự nhập ('' nếu không có -> app gọi qua máy chủ).
 function getApiKey() {
     return localStorage.getItem('eco_gemini_api_key') || '';
-=======
-function getApiKey() {
-    return localStorage.getItem('eco_gemini_api_key') || FALLBACK_API_KEY;
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
 }
 
 window.saveApiKey = function () {
@@ -70,16 +61,14 @@ const GeminiManager = {
     },
 
     async callGeminiAPI(systemInstruction, contents, temperature = 0.7) {
-<<<<<<< HEAD
-=======
-        const apiKey = getApiKey();
-
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
+        // Thứ tự: model nhanh còn được cấp -> model mạnh hơn -> alias mới nhất -> model cũ.
+        // (gemini-2.0-* đã ngừng; gemini-2.5-* chỉ còn với tài khoản đã dùng từ trước -> key mới có thể báo 404.)
+        // Model không tồn tại chỉ mất ~0,4 giây rồi tự chuyển sang model kế tiếp.
         const modelsToTry = [
-            'gemini-2.5-flash',
-            'gemini-2.0-flash',
-            'gemini-2.0-flash-lite',
-            'gemini-flash-latest'
+            'gemini-3.5-flash-lite',
+            'gemini-3.8-flash',
+            'gemini-flash-latest',
+            'gemini-2.5-flash'
         ];
 
         const body = {
@@ -91,28 +80,14 @@ const GeminiManager = {
         let lastError = null;
 
         for (const model of modelsToTry) {
-<<<<<<< HEAD
             try {
                 console.log(`[Gemini] Đang thử model: ${model}...`);
                 const res = await window.ecoGeminiGateway.generateContent(model, body);
-=======
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-            try {
-                console.log(`[Gemini] Đang thử model: ${model}...`);
-                const res = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
 
                 if (!res.ok) {
                     const errBody = await res.json().catch(() => ({}));
                     const errMsg = errBody.error?.message || 'Lỗi kết nối';
-<<<<<<< HEAD
                     if (window.ecoGeminiGateway.isNoKeyError(errBody)) throw new Error('Chưa cấu hình API key trên máy chủ. Hãy nhập API Key cá nhân trong Setting.');
-=======
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
 
                     if (res.status === 503 || errMsg.toLowerCase().includes('high demand') || errMsg.toLowerCase().includes('overloaded')) {
                         console.warn(`[Gemini] Model ${model} đang quá tải, chuyển sang model dự phòng...`);
@@ -542,10 +517,7 @@ const GeminiManager = {
 
             if (this.diyLoaded) {
                 diySection?.classList.toggle('hidden');
-<<<<<<< HEAD
                 if (diySection && !diySection.classList.contains('hidden')) window.ecoVoice?.speakCreative();
-=======
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
                 return;
             }
             if (diySection) diySection.classList.remove('hidden');
@@ -583,10 +555,7 @@ const GeminiManager = {
                 }
 
                 this.diyLoaded = true;
-<<<<<<< HEAD
                 window.ecoVoice?.speakCreative();
-=======
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
 
             } catch (err) {
                 console.error('DIY error:', err);

@@ -35,11 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function navigateTo(targetId) {
         // Dừng đọc to / đang nghe khi chuyển màn hình (không gửi tin nhắn dở dang)
         window.ecoVoice?.stop();
-<<<<<<< HEAD
         window.ecoSTT?.cancel();
-=======
-        window.ecoVoice?.cancelListening();
->>>>>>> 2bc54e86dd55deec6bc56cdf0b09d0b01eb09f5e
  
         [...desktopNavItems, ...mobileNavItems].forEach(item => {
             item.classList.toggle('active', item.dataset.target === targetId);

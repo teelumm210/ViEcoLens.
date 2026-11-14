@@ -12,6 +12,9 @@
 
 const MAX_BODY_BYTES = 5.5 * 1024 * 1024;   // giới hạn payload của Netlify Functions là 6 MB
 const MAX_OUTPUT_TOKENS = 4096;
+// Netlify cắt function ở ~30 giây và trả về trang lỗi dạng chữ (client không đọc được).
+// Tự ngắt sớm ở 25 giây để trả JSON rõ ràng, client sẽ chuyển sang model dự phòng.
+const UPSTREAM_TIMEOUT_MS = 25000;
 const MODEL_RE = /^gemini-[a-z0-9][a-z0-9.\-]{0,60}$/;
 const ALLOWED_FIELDS = ['contents', 'systemInstruction', 'generationConfig'];
 
@@ -65,21 +68,28 @@ export default async (req) => {
         safeBody.generationConfig = g;
     }
 
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), UPSTREAM_TIMEOUT_MS);
     let upstream;
+    let text;
     try {
         upstream = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-                body: JSON.stringify(safeBody)
+                body: JSON.stringify(safeBody),
+                signal: ctrl.signal
             }
         );
+        text = await upstream.text();
     } catch (e) {
+        if (e && e.name === 'AbortError') return fail(504, 'Model AI phản hồi quá lâu (hơn 25 giây).', 'TIMEOUT');
         return fail(502, 'Không kết nối được tới Gemini.', 'UPSTREAM');
+    } finally {
+        clearTimeout(timer);
     }
 
-    const text = await upstream.text();
     return new Response(text, {
         status: upstream.status,
         headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
