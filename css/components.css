@@ -1973,3 +1973,36 @@
 @media (max-width: 960px) {
     .live-bottom { bottom: calc(var(--mobile-nav-height) + var(--safe-area-bottom)); padding-bottom: 14px; }
 }
+
+
+/* ===== Danh sách vật thể (nhận diện đa vật thể) ===== */
+.multi-items-card { margin-bottom: 14px; }
+.multi-items-card h5 { margin: 0 0 8px; font-size: 11px; letter-spacing: 0.4px; color: var(--text-muted); }
+.multi-items-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.multi-chip {
+    border: 2px solid var(--c, #27C860); background: transparent; color: var(--text-main, #1f2937);
+    font-family: inherit; font-size: 13px; font-weight: 700; padding: 7px 12px; border-radius: 99px; cursor: pointer;
+    transition: 0.15s; max-width: 100%; text-align: left;
+}
+.multi-chip.active { background: var(--c, #27C860); color: #fff; }
+
+/* Chi tiết vật thể ở Greeny Live */
+button.live-chip { border: none; font-family: inherit; cursor: pointer; }
+.live-chip.active { outline: 2px solid #fff; }
+.live-detail {
+    background: rgba(255, 255, 255, 0.16); backdrop-filter: blur(8px); border-radius: 16px; padding: 10px 12px; color: white;
+}
+.live-detail-head { display: flex; align-items: center; gap: 8px; }
+.live-detail-head strong { font-size: 15px; font-weight: 800; }
+.live-detail-head span {
+    font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 99px; background: var(--c, #27C860); color: #fff;
+}
+.live-detail-head button {
+    margin-left: auto; width: 28px; height: 28px; border-radius: 50%; border: none; background: rgba(255, 255, 255, 0.2);
+    color: #fff; cursor: pointer;
+}
+.live-detail p { margin: 6px 0 8px; font-size: 13px; line-height: 1.4; }
+.live-detail-ask {
+    border: none; border-radius: 99px; padding: 8px 14px; font-family: inherit; font-size: 13px; font-weight: 800; cursor: pointer;
+    background: var(--primary-gradient); color: #fff;
+}

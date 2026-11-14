@@ -251,6 +251,11 @@
                         </div>
 
                         <div class="result-body">
+                            <div class="multi-items-card hidden" id="multi-items-card">
+                                <h5>VẬT THỂ TRONG ẢNH (<span id="multi-items-count">0</span>) · chạm để xem chi tiết</h5>
+                                <div class="multi-items-list" id="multi-items-list"></div>
+                            </div>
+
                             <div class="info-card grey-card">
                                 <h5>ĐỘ AN TOÀN MÔI TRƯỜNG</h5>
                                 <p id="safety-description">Phân hủy siêu chậm. Tạo vi nhựa gây hại cho đất.</p>
@@ -467,6 +472,15 @@
                     </div>
 
                     <div class="live-bottom">
+                        <div class="live-detail hidden" id="live-detail">
+                            <div class="live-detail-head">
+                                <strong id="live-detail-name"></strong>
+                                <span id="live-detail-group"></span>
+                                <button type="button" id="live-detail-close" aria-label="Đóng"><i class="fa-solid fa-xmark"></i></button>
+                            </div>
+                            <p id="live-detail-tip"></p>
+                            <button type="button" class="live-detail-ask" id="live-detail-ask"><i class="fa-solid fa-comment-dots"></i> Hỏi Greeny về vật này</button>
+                        </div>
                         <div class="live-chips" id="live-chips"></div>
                         <div class="live-talk">
                             <p class="live-user" id="live-user"></p>

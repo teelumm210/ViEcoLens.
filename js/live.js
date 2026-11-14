@@ -13,7 +13,7 @@
 
     const TARGET_FRAME_MS = 120;        // nhịp vòng lặp phát hiện (nhanh hơn nếu máy kịp)
     const WORK_MAX = 640;               // cạnh dài tối đa của ảnh đưa vào YOLO / gửi Gemini
-    const MAX_TRACKS = 8;
+    const MAX_TRACKS = 12;
     const TRACK = { minHits: 2, maxAgeMs: 700, alpha: 0.5, matchIou: 0.3 };
 
     // ---------- Nhóm rác gợi ý nhanh cho các lớp COCO (Gemini sẽ giải thích chi tiết khi được hỏi) ----------
@@ -133,7 +133,9 @@
         loopTimer: null,
         rec: null,
         askId: 0,
-        work: null
+        work: null,
+        selectedClass: null,          // lớp vật thể đang được chọn xem chi tiết
+        chipSig: ''                   // chữ ký danh sách nhãn (chỉ dựng lại khi thay đổi, để chạm không bị mất)
     };
 
     // ---------- Giao diện ----------
@@ -172,6 +174,40 @@
         if (el) el.textContent = text;
     }
 
+    const GROUP_TIP = {
+        tai_che: 'Thường là rác tái chế: làm sạch, làm khô rồi bỏ vào thùng rác tái chế.',
+        huu_co: 'Thường là rác hữu cơ: bỏ vào thùng rác hữu cơ hoặc ủ phân compost.',
+        nguy_hiem: 'Có thể là rác nguy hại/điện tử: không vứt chung rác thường, hãy mang đến điểm thu gom riêng.',
+        vo_co: 'Thường là rác vô cơ (rác còn lại): bỏ đúng thùng, không xả ra môi trường.'
+    };
+
+    function renderDetail() {
+        const box = $('live-detail');
+        if (!box) return;
+        const list = visibleTracks(S.tracks).filter((t) => t.class === S.selectedClass);
+        if (!S.selectedClass || !list.length) {
+            S.selectedClass = null;
+            box.classList.add('hidden');
+            return;
+        }
+        const t = list[0];
+        const conf = Math.round(Math.max(...list.map((x) => x.conf)) * 100);
+        const g = GROUPS[t.group];
+        $('live-detail-name').textContent = list.length > 1 ? `${t.classVi} ×${list.length}` : t.classVi;
+        const gl = $('live-detail-group');
+        gl.textContent = `rác ${g.label} · ${conf}%`;
+        gl.style.setProperty('--c', g.color);
+        $('live-detail-tip').textContent = GROUP_TIP[t.group];
+        box.classList.remove('hidden');
+    }
+
+    function selectClass(cls) {
+        S.selectedClass = S.selectedClass === cls ? null : cls;
+        S.chipSig = '';
+        renderChips();
+        render();
+    }
+
     function renderChips() {
         const box = $('live-chips');
         if (!box) return;
@@ -182,20 +218,29 @@
             c.n++;
             counts.set(t.class, c);
         });
-        box.textContent = '';
-        counts.forEach(({ t, n }) => {
-            const chip = document.createElement('span');
-            chip.className = 'live-chip';
-            chip.style.setProperty('--c', GROUPS[t.group].color);
-            chip.textContent = `${t.classVi}${n > 1 ? ' ×' + n : ''} · ${GROUPS[t.group].label}`;
-            box.appendChild(chip);
-        });
-        if (!counts.size && S.detectorReady) {
-            const hint = document.createElement('span');
-            hint.className = 'live-chip empty';
-            hint.textContent = 'Hướng camera vào vật cần xem';
-            box.appendChild(hint);
+        if (S.selectedClass && !counts.has(S.selectedClass)) S.selectedClass = null;
+
+        const sig = [...counts.entries()].map(([k, v]) => `${k}:${v.n}`).join('|') + `#${S.selectedClass || ''}#${S.detectorReady ? 1 : 0}`;
+        if (sig !== S.chipSig) {
+            S.chipSig = sig;
+            box.textContent = '';
+            counts.forEach(({ t, n }, cls) => {
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'live-chip' + (S.selectedClass === cls ? ' active' : '');
+                chip.style.setProperty('--c', GROUPS[t.group].color);
+                chip.textContent = `${t.classVi}${n > 1 ? ' ×' + n : ''} · ${GROUPS[t.group].label}`;
+                chip.addEventListener('click', () => selectClass(cls));
+                box.appendChild(chip);
+            });
+            if (!counts.size && S.detectorReady) {
+                const hint = document.createElement('span');
+                hint.className = 'live-chip empty';
+                hint.textContent = 'Hướng camera vào vật cần xem';
+                box.appendChild(hint);
+            }
         }
+        renderDetail();
     }
 
     function render() {
@@ -222,8 +267,11 @@
         visibleTracks(S.tracks).forEach((t) => {
             const b = mapBox(t.box, vw, vh, cw, ch);
             const color = GROUPS[t.group].color;
+            const dim = S.selectedClass && t.class !== S.selectedClass;
+            const hot = S.selectedClass && t.class === S.selectedClass;
+            ctx.globalAlpha = dim ? 0.35 : 1;
 
-            ctx.lineWidth = 3;
+            ctx.lineWidth = hot ? 5 : 3;
             ctx.strokeStyle = color;
             ctx.fillStyle = color + '22';
             ctx.beginPath();
@@ -241,6 +289,7 @@
             ctx.fillStyle = '#fff';
             ctx.textBaseline = 'middle';
             ctx.fillText(label, b.x + 7, ly + 11);
+            ctx.globalAlpha = 1;
         });
     }
 
@@ -357,6 +406,9 @@
         canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
         const box = $('live-chips');
         if (box) box.textContent = '';
+        S.selectedClass = null;
+        S.chipSig = '';
+        $('live-detail')?.classList.add('hidden');
     }
 
     async function flip() {
@@ -532,6 +584,14 @@
         $('open-live-btn')?.addEventListener('click', () => window.navigateTo?.('live-screen'));
         $('close-live-btn')?.addEventListener('click', () => window.navigateTo?.('scan-screen'));
         $('live-flip-btn')?.addEventListener('click', flip);
+        $('live-detail-close')?.addEventListener('click', () => { S.selectedClass = null; S.chipSig = ''; renderChips(); render(); });
+        $('live-detail-ask')?.addEventListener('click', () => {
+            const t = visibleTracks(S.tracks).find((x) => x.class === S.selectedClass);
+            if (!t) return;
+            window.ecoVoice?.stop();
+            if (S.rec) { try { S.rec.abort(); } catch (err) { /* bỏ qua */ } S.rec = null; }
+            ask(`Cho mình biết ${t.classVi} này là loại rác nào và nên xử lý thế nào?`);
+        });
         $('live-mic-btn')?.addEventListener('click', onMic);
 
         $('live-frame-toggle')?.addEventListener('click', (e) => {
@@ -566,7 +626,7 @@
     window.ecoLive = {
         start, stop, ask, flip,
         // phục vụ kiểm thử
-        updateTracks, visibleTracks, summarize, mapBox, groupOf, iou, positionOf,
+        updateTracks, visibleTracks, summarize, mapBox, groupOf, iou, positionOf, renderChips, selectClass,
         _state: S
     };
 })();

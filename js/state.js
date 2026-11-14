@@ -13,7 +13,7 @@ const StateManager = {
     voice: {
         autoSpeak: localStorage.getItem('eco_voice_auto') === '1',
         rate: parseFloat(localStorage.getItem('eco_voice_rate')) || 0.9,
-        autoSend: localStorage.getItem('eco_voice_autosend') !== '0',
+        autoSend: localStorage.getItem('eco_voice_autosend_v2') === '1',   // mặc định TẮT: người dùng tự bấm Gửi
         engine: localStorage.getItem('eco_voice_engine') || 'auto',      // auto | device | gemini
         deviceVoice: localStorage.getItem('eco_voice_device') || '',     // '' = tự chọn giọng tiếng Việt tốt nhất
         geminiVoice: localStorage.getItem('eco_voice_gvoice') || 'Kore'

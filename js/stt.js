@@ -5,7 +5,8 @@
  *   - Không đọc to câu trả lời. Việc đọc to do js/voice.js lo (nút "Đọc to" / "Tự động đọc").
  *   - Không liên quan Greeny Live: voice chat realtime nằm ở js/live.js và có bộ nhận giọng riêng.
  *
- * Tùy chọn "Nói xong tự gửi" (Cài đặt › Giọng nói) thuộc về chức năng này.
+ * MẶC ĐỊNH KHÔNG tự gửi: chữ nhận dạng được chỉ điền vào ô chat, người dùng tự bấm nút Gửi.
+ *   Tùy chọn "Nói xong tự gửi" (Cài đặt › Giọng nói) vẫn còn, nhưng mặc định tắt.
  * Yêu cầu trong index.html: #voice-mic-btn, #chat-input, #send-btn, #voice-send-toggle
  * và <script src="js/stt.js"> (sau state.js).
  * app.js gọi ecoSTT.cancel() khi chuyển màn hình.
@@ -13,7 +14,7 @@
 (() => {
     'use strict';
 
-    const LS_SEND = 'eco_voice_autosend';
+    const LS_SEND = 'eco_voice_autosend_v2';
 
     const store = {
         get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
@@ -21,7 +22,7 @@
     };
 
     // Dùng chung đối tượng cài đặt với state.js (cùng khóa localStorage với trước đây).
-    const settings = (window.ecoState && window.ecoState.voice) || { autoSend: store.get(LS_SEND) !== '0' };
+    const settings = (window.ecoState && window.ecoState.voice) || { autoSend: store.get(LS_SEND) === '1' };
 
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 

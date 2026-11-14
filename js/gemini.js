@@ -11,6 +11,11 @@ Trả về JSON thuần (không markdown) theo cấu trúc:
 {"name":"Tên vật thể chi tiết bằng tiếng Việt (VD: Chai nhựa PET, Vỏ lon nhôm, Hộp bìa carton)","percentage":0-100 (Độ an toàn và thân thiện với môi trường),"tag":"RÁC TÁI CHẾ|RÁC HỮU CƠ|RÁC NGUY HIỂM|RÁC VÔ CƠ","description":"1-2 câu tác động môi trường","suggestion":"1-2 câu cách phân loại/xử lý","icon":"fa-icon-name"}
 percentage: 0=rất ô nhiễm, 100=an toàn. Trả lời bằng tiếng Việt. Hãy phân tích thật chính xác.`;
 
+const MULTI_SYSTEM_INSTRUCTION = `Bạn là chuyên gia phân loại rác thông minh. Hãy nhận diện TẤT CẢ các vật thể riêng biệt nhìn thấy trong ảnh (tối đa 8 vật, kể cả vật nhỏ hoặc ở rìa ảnh nếu nhận ra được) và phân loại rác cho TỪNG vật. Bỏ qua người, động vật, xe cộ, tường, sàn nhà, bầu trời. Mỗi vật chỉ liệt kê một lần. Nếu chỉ có một vật thì trả về mảng một phần tử. Bắt buộc đặt tên cụ thể cho mỗi vật, KHÔNG dùng "không rõ".
+Trả về JSON thuần (không markdown) là MỘT MẢNG, mỗi phần tử theo cấu trúc:
+{"name":"Tên vật thể cụ thể (VD: Chai nhựa PET, Vỏ chuối, Hộp bìa carton)","percentage":0-100 (Độ an toàn và thân thiện với môi trường),"tag":"RÁC TÁI CHẾ|RÁC HỮU CƠ|RÁC NGUY HIỂM|RÁC VÔ CƠ","description":"1 câu tác động môi trường","suggestion":"1 câu cách phân loại/xử lý","icon":"fa-icon-name","boundingBox":{"x":0-1,"y":0-1,"width":0-1,"height":0-1}}
+percentage: 0=rất ô nhiễm, 100=an toàn. boundingBox: tọa độ tương đối từ 0-1 bao quanh vật. Trả lời bằng tiếng Việt.`;
+
 const DIY_SYSTEM_INSTRUCTION = `Gợi ý một ý tưởng tái chế sáng tạo. Trả JSON thuần (không markdown):
 [{"title":"Tên ý tưởng","emoji":"emoji","difficulty":"easy|medium|hard","steps":["Bước 1","Bước 2"]}]
 Mỗi ý tưởng 2-3 bước, thực tế, tiếng Việt.`;
@@ -41,6 +46,7 @@ const GeminiManager = {
         this.setupChat();
         this.setupChatAboutBtn();
         this.setupDIYButton();
+        this.setupMultiList();
 
         const input = document.getElementById('api-key-input-pad');
         const savedKey = localStorage.getItem('eco_gemini_api_key');
@@ -129,16 +135,230 @@ const GeminiManager = {
         }
     },
 
+    // ================= NHẬN DIỆN ĐA VẬT THỂ (1 lần chụp) =================
+    _tagHex(tag) {
+        if (tag === 'RÁC NGUY HIỂM') return '#FF4757';
+        if (tag === 'RÁC VÔ CƠ') return '#F5A623';
+        if (tag === 'RÁC HỮU CƠ') return '#1E9F4A';
+        return '#27C860';
+    },
+
+    _normalizeItem(it) {
+        if (!it || typeof it !== 'object') return null;
+        const r = { ...it };
+        r.name = String(r.name || '').trim();
+        if (!r.name) return null;
+        r.tag = r.tag || 'KHÔNG RÕ';
+        r.description = r.description || 'Không có mô tả chi tiết về tác động môi trường.';
+        r.suggestion = r.suggestion || 'Hãy phân loại và bỏ rác đúng nơi quy định để bảo vệ môi trường.';
+
+        r.percentage = parseFloat(String(r.percentage).replace(/[^0-9.]/g, ''));
+        if (isNaN(r.percentage)) {
+            if (r.tag === 'RÁC TÁI CHẾ') r.percentage = 85;
+            else if (r.tag === 'RÁC HỮU CƠ') r.percentage = 70;
+            else if (r.tag === 'RÁC NGUY HIỂM') r.percentage = 15;
+            else r.percentage = 50;
+        }
+        r.percentage = Math.max(0, Math.min(100, Math.round(r.percentage)));
+
+        const b = r.boundingBox;
+        let box = null;
+        if (b && [b.x, b.y, b.width, b.height].every((n) => typeof n === 'number' && isFinite(n))
+            && b.x <= 1 && b.y <= 1 && b.width <= 1.01 && b.height <= 1.01) {
+            const x = Math.max(0, Math.min(1, b.x));
+            const y = Math.max(0, Math.min(1, b.y));
+            const width = Math.min(b.width, 1 - x);
+            const height = Math.min(b.height, 1 - y);
+            if (width > 0.01 && height > 0.01) box = { x, y, width, height };
+        }
+        r.boundingBox = box;
+
+        this._applyTagColors(r);
+        r._multi = true;
+        return r;
+    },
+
+    // Trả về true nếu đã hiển thị kết quả đa vật thể; false -> để luồng cũ (1 vật) xử lý.
+    async _analyzeMulti(imageDataUrl, detections) {
+        try {
+            this._updateStepIndicator('gemini', 'Đang nhận diện các vật thể trong ảnh...');
+            const [header, base64Data] = imageDataUrl.split(',');
+            const mimeType = header.split(':')[1].split(';')[0];
+
+            let hint = '';
+            if (detections && detections.length) {
+                hint = '\nGợi ý từ máy (có thể sai hoặc thiếu): ' +
+                    detections.slice(0, 12).map((d) => `${d.classVi} (${Math.round(d.confidence * 100)}%)`).join(', ') + '.';
+            }
+            const contents = [{
+                role: 'user',
+                parts: [
+                    { inlineData: { mimeType, data: base64Data } },
+                    { text: 'Nhận diện TẤT CẢ vật thể riêng biệt trong ảnh và phân loại rác cho từng vật.' + hint }
+                ]
+            }];
+
+            const aiText = await this.callGeminiAPI(MULTI_SYSTEM_INSTRUCTION, contents, 0.4);
+            const m = aiText.match(/\[[\s\S]*\]/);
+            let parsed = this.parseJSONResponse(m ? m[0] : aiText);
+            if (parsed && !Array.isArray(parsed)) parsed = parsed.items || parsed.objects || [parsed];
+            if (!Array.isArray(parsed) || !parsed.length) return false;
+
+            const items = parsed.slice(0, 8).map((it) => this._normalizeItem(it)).filter(Boolean);
+            if (!items.length) return false;
+
+            await this._showMulti(imageDataUrl, items);
+            return true;
+        } catch (err) {
+            console.warn('[Multi] Không nhận diện đa vật thể được, dùng cách cũ:', err);
+            return false;
+        }
+    },
+
+    async _showMulti(imageDataUrl, items) {
+        this.multiItems = items;
+        this.multiImage = imageDataUrl;
+
+        // Vật hiển thị đầu tiên: vật gần giữa khung và lớn nhất (giống cách chọn trước đây)
+        let primary = 0;
+        let bestScore = -1;
+        items.forEach((it, i) => {
+            const b = it.boundingBox;
+            let sc = 0.3;
+            if (b) {
+                const d = Math.hypot(b.x + b.width / 2 - 0.5, b.y + b.height / 2 - 0.5) / Math.SQRT2;
+                sc = (1 - d * 0.7) + Math.min(b.width * b.height * 2, 0.3);
+            }
+            if (sc > bestScore) { bestScore = sc; primary = i; }
+        });
+
+        this._updateStepIndicator('done', '');
+        await this.selectMultiItem(primary);
+        if (window.ecoState) window.ecoState.addPoints(items[primary].points || 10, items[primary]);
+    },
+
+    async selectMultiItem(idx) {
+        const items = this.multiItems || [];
+        const item = items[idx];
+        if (!item) return;
+        this.multiSelected = idx;
+        item.otherItems = items.filter((_, i) => i !== idx).map((o) => o.name);
+
+        this.currentContext = item;
+        this.diyLoaded = false;
+
+        const annotated = await this.createMultiAnnotatedImage(this.multiImage, items, idx);
+        this.updateResultUI(item, annotated);
+        this.renderMultiList();
+    },
+
+    renderMultiList() {
+        const card = document.getElementById('multi-items-card');
+        const list = document.getElementById('multi-items-list');
+        const count = document.getElementById('multi-items-count');
+        if (!card || !list) return;
+
+        const items = this.multiItems || [];
+        list.textContent = '';
+        if (items.length < 2) { card.classList.add('hidden'); return; }
+
+        if (count) count.textContent = items.length;
+        items.forEach((it, i) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'multi-chip' + (i === this.multiSelected ? ' active' : '');
+            btn.dataset.idx = String(i);
+            btn.style.setProperty('--c', this._tagHex(it.tag));
+            btn.textContent = `${i + 1}. ${it.name}`;
+            list.appendChild(btn);
+        });
+        card.classList.remove('hidden');
+    },
+
+    setupMultiList() {
+        const list = document.getElementById('multi-items-list');
+        if (!list || list.dataset.bound) return;
+        list.dataset.bound = '1';
+        list.addEventListener('click', (e) => {
+            const btn = e.target.closest('.multi-chip');
+            if (!btn) return;
+            const idx = parseInt(btn.dataset.idx, 10);
+            if (idx === this.multiSelected) return;
+            this.selectMultiItem(idx);
+        });
+    },
+
+    createMultiAnnotatedImage(imageDataUrl, items, selectedIdx) {
+        return new Promise((resolve) => {
+            if (!items.some((it) => it.boundingBox)) { resolve(imageDataUrl); return; }
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+
+                // Vẽ vật không chọn trước, vật được chọn vẽ sau cùng để nằm trên
+                const order = items.map((_, i) => i).sort((a, b) => (a === selectedIdx) - (b === selectedIdx));
+                order.forEach((i) => {
+                    const it = items[i];
+                    const bb = it.boundingBox;
+                    if (!bb) return;
+                    const sel = i === selectedIdx;
+                    const x = bb.x * img.width, y = bb.y * img.height;
+                    const w = bb.width * img.width, h = bb.height * img.height;
+                    const color = this._tagHex(it.tag);
+
+                    ctx.globalAlpha = sel ? 1 : 0.75;
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = sel ? Math.max(4, img.width * 0.006) : Math.max(2, img.width * 0.003);
+                    ctx.beginPath();
+                    if (ctx.roundRect) ctx.roundRect(x, y, w, h, 8); else ctx.rect(x, y, w, h);
+                    ctx.stroke();
+                    if (sel) {
+                        const r = parseInt(color.slice(1, 3), 16), g = parseInt(color.slice(3, 5), 16), b = parseInt(color.slice(5, 7), 16);
+                        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.12)`;
+                        ctx.fill();
+                    }
+
+                    const name = it.name.length > 22 ? it.name.slice(0, 21) + '…' : it.name;
+                    const label = `${i + 1}. ${name}`;
+                    const fontSize = Math.max(sel ? 14 : 12, img.width * (sel ? 0.022 : 0.017));
+                    ctx.font = `bold ${fontSize}px Inter, sans-serif`;
+                    const tw = ctx.measureText(label).width;
+                    const px = 10, badgeH = fontSize + 12;
+                    const bx = x, by = Math.max(0, y - badgeH - 3);
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    if (ctx.roundRect) ctx.roundRect(bx, by, tw + px * 2, badgeH, 6); else ctx.rect(bx, by, tw + px * 2, badgeH);
+                    ctx.fill();
+                    ctx.fillStyle = '#FFF';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(label, bx + px, by + badgeH / 2);
+                    ctx.globalAlpha = 1;
+                });
+
+                resolve(canvas.toDataURL('image/jpeg', 0.9));
+            };
+            img.onerror = () => resolve(imageDataUrl);
+            img.src = imageDataUrl;
+        });
+    },
+
     async analyzeWithYolo(imageDataUrl) {
         try {
             this._updateStepIndicator('yolo', 'Đang quét hình ảnh...');
 
             const yoloResult = await window.yoloDetector.detect(imageDataUrl);
 
+            // Ưu tiên nhận diện tất cả vật thể trong ảnh; lỗi thì rơi về luồng 1 vật như cũ
+            if (await this._analyzeMulti(imageDataUrl, yoloResult && yoloResult.detections)) return;
+
             if (!yoloResult || !yoloResult.bestDetection) {
 
                 this._updateStepIndicator('gemini', 'Đang phân tích chi tiết...');
-                return await this.analyzeImage(imageDataUrl);
+                return await this.analyzeImage(imageDataUrl, true);
             }
 
             const best = yoloResult.bestDetection;
@@ -246,8 +466,10 @@ const GeminiManager = {
     },
 
 
-    async analyzeImage(imageDataUrl) {
+    async analyzeImage(imageDataUrl, skipMulti = false) {
         try {
+            if (!skipMulti && await this._analyzeMulti(imageDataUrl, null)) return;
+
             const [header, base64Data] = imageDataUrl.split(',');
             const mimeType = header.split(':')[1].split(';')[0];
 
@@ -396,6 +618,7 @@ const GeminiManager = {
     },
 
     updateResultUI(result, imageDataUrl) {
+        if (!result._multi) { this.multiItems = []; this.renderMultiList(); }   // kết quả 1 vật: ẩn danh sách
         window.currentMapReportImage = imageDataUrl;
         window.currentMapReportDesc = result.name;
 
@@ -594,6 +817,9 @@ const GeminiManager = {
                     systemInstruction += `\nThe user recently scanned: "${this.currentContext.name}" (${this.currentContext.tag}).`;
                     if (this.currentContext.yoloClass) {
                         systemInstruction += ` YOLO detected: "${this.currentContext.yoloClass}" with ${(this.currentContext.yoloConfidence * 100).toFixed(0)}% confidence.`;
+                    }
+                    if (this.currentContext.otherItems && this.currentContext.otherItems.length) {
+                        systemInstruction += ` The same photo also contained: ${this.currentContext.otherItems.join(', ')}.`;
                     }
                     systemInstruction += ` When relevant, refer to this context to give them specific advice.`;
                 }
