@@ -529,9 +529,15 @@
                 window.ecoVoice?.stop();
                 afterReply(my, ok);
             }, ms);
-            window.ecoVoice.speak(reply, 'live-screen', {
-                onDone: () => { clearTimeout(S.speakTimer); afterReply(my, ok); }
-            });
+            try {
+                window.ecoVoice.speak(reply, 'live-screen', {
+                    onDone: () => { clearTimeout(S.speakTimer); afterReply(my, ok); }
+                });
+            } catch (err) {                                          // lỗi giọng đọc không được làm treo lượt hội thoại
+                console.warn('[Live] đọc to lỗi:', err);
+                clearTimeout(S.speakTimer);
+                afterReply(my, ok);
+            }
         } else {
             afterReply(my, ok);
         }
@@ -614,27 +620,49 @@
 
         let transcript = '';
         let aborted = false;
+        let delivered = false;         // chỉ gửi câu hỏi đi MỘT lần
+        let ended = false;
+        let silenceTimer = null;       // hết nói một lúc -> tự chốt câu (Android/iOS hay không bắn isFinal/onend đúng lúc)
+        let hardTimer = null;          // chốt chặn cứng: không bao giờ treo ở trạng thái nghe
+
+        const clearTimers = () => { clearTimeout(silenceTimer); clearTimeout(hardTimer); };
+        const stopRec = () => { try { rec.stop(); } catch (e) { /* bỏ qua */ } };
+        const deliver = () => {
+            if (delivered || aborted || !transcript) return;
+            delivered = true;
+            clearTimers();
+            if (onFinal) onFinal(transcript);
+        };
+        const finish = () => {
+            if (ended) return;
+            ended = true;
+            clearTimers();
+            deliver();
+            if (onEnd) onEnd();
+        };
 
         rec.onresult = (e) => {
             transcript = Array.from(e.results).map((r) => r[0].transcript).join(' ').replace(/\s+/g, ' ').trim();
             if (onInterim) onInterim(transcript);
+            clearTimeout(silenceTimer);
+            const last = e.results[e.results.length - 1];
+            if (last && last.isFinal) { deliver(); stopRec(); }
+            else silenceTimer = setTimeout(() => { deliver(); stopRec(); }, 1600);
         };
         rec.onerror = (e) => { if (e.error !== 'aborted' && onError) onError(e); };
-        rec.onend = () => {
-            if (transcript && !aborted && onFinal) onFinal(transcript);
-            if (onEnd) onEnd();
-        };
+        rec.onend = finish;
 
         try {
             rec.start();
         } catch (err) {
             if (onError) onError({ error: 'start' });
-            if (onEnd) onEnd();
+            finish();
             return null;
         }
+        hardTimer = setTimeout(() => { stopRec(); setTimeout(finish, 1500); }, 15000);
         return {
-            stop() { try { rec.stop(); } catch (e) { /* bỏ qua */ } },
-            abort() { aborted = true; try { rec.abort(); } catch (e) { /* bỏ qua */ } }
+            stop() { stopRec(); },
+            abort() { aborted = true; clearTimers(); try { rec.abort(); } catch (e) { /* bỏ qua */ } }
         };
     }
 
@@ -643,7 +671,8 @@
 
         setState('listening');
         setUser('');
-        S.rec = listenOnce({
+        let handle = null;
+        handle = S.rec = listenOnce({
             onInterim: (t) => setUser(t, true),
             onFinal: (t) => { S.heard = true; S.silent = 0; ask(t); },
             onError: (e) => {
@@ -663,7 +692,7 @@
                 }
             },
             onEnd: () => {
-                S.rec = null;
+                if (S.rec === handle) S.rec = null;
                 if (S.voice && S.running && S.state === 'listening') {
                     // im lặng / chưa nói gì -> nghe tiếp, nhưng quá nhiều lượt im lặng thì tạm dừng (đỡ bíp liên tục trên Android)
                     if (++S.silent >= MAX_SILENT_LISTENS) {

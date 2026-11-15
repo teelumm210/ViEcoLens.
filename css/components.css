@@ -2039,3 +2039,15 @@ button.live-chip { border: none; font-family: inherit; cursor: pointer; }
     border: none; border-radius: 99px; padding: 8px 14px; font-family: inherit; font-size: 13px; font-weight: 800; cursor: pointer;
     background: var(--primary-gradient); color: #fff;
 }
+
+
+/* ===== Tinh chỉnh Android / iOS (không đổi giao diện desktop) ===== */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+button, .live-chip, .live-ctl { touch-action: manipulation; }
+.live-talk { max-height: 26vh; max-height: 26dvh; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+/* iOS Safari tự phóng to trang khi bấm vào ô nhập có chữ < 16px */
+@media (pointer: coarse) {
+    input[type="text"], input[type="password"], input[type="email"], input[type="search"], input[type="number"], input:not([type]), textarea {
+        font-size: 16px !important;
+    }
+}
