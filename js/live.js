@@ -569,6 +569,8 @@
                     system: buildSystem(),
                     contents: [...S.history.slice(-6), { role: 'user', parts }],
                     temperature: 0.6,
+                    maxOutputTokens: 1024,
+                    fast: true,
                     deadlineMs: ASK_DEADLINE_MS
                 }),
                 new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('timeout'), { code: 'timeout' })), ASK_DEADLINE_MS + 4000))
@@ -720,6 +722,7 @@
 
     function onMic() {
         if (!S.running) return;
+        try { window.ecoVoice && window.ecoVoice.unlock && window.ecoVoice.unlock(); } catch (e) { /* bỏ qua */ }
         if (!S.voice) {
             S.voice = true;
             S.silent = 0;

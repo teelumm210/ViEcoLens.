@@ -19,20 +19,32 @@
 
     // Gọi generateContent, thử lần lượt các model. Trả về chuỗi văn bản của ứng viên đầu tiên.
     // opts.deadlineMs: tổng thời gian tối đa cho cả chuỗi thử model (trò chuyện live cần trả lời nhanh, không chờ cả phút).
+    const noThink = new Set();
+    function thinkingFor(model) {
+        if (/^gemini-3/.test(model)) return { thinkingLevel: 'minimal' };
+        if (/^gemini-2\.5-flash/.test(model)) return { thinkingBudget: 0 };
+        return null;
+    }
+
     async function request(body, opts = {}) {
         let lastErr = null;
         let sentBody = body;
         const startedAt = Date.now();
         const deadline = opts.deadlineMs || 0;
 
-        for (const model of MODELS) {
+        for (let mi = 0; mi < MODELS.length; mi++) {
+            const model = MODELS[mi];
             const left = deadline ? deadline - (Date.now() - startedAt) : TIMEOUT_MS;
             if (left < 2500) { lastErr = lastErr || makeError('Gemini phản hồi quá lâu.', 'timeout'); break; }
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), Math.min(TIMEOUT_MS, left));
             try {
                 // key cá nhân -> gọi thẳng Google; không có -> qua Netlify Function (js/gemini-gateway.js)
-                const res = await window.ecoGeminiGateway.generateContent(model, sentBody, { signal: ctrl.signal });
+                // Trò chuyện live cần nhanh: giảm bước "suy nghĩ" nội bộ của model (model nào không hỗ trợ sẽ tự bỏ).
+                let sendBody = sentBody;
+                const think = opts.fast && !noThink.has(model) ? thinkingFor(model) : null;
+                if (think) sendBody = { ...sentBody, generationConfig: { ...sentBody.generationConfig, thinkingConfig: think } };
+                const res = await window.ecoGeminiGateway.generateContent(model, sendBody, { signal: ctrl.signal });
 
                 if (!res.ok) {
                     const errBody = await res.json().catch(() => ({}));
@@ -49,6 +61,11 @@
                             ...sentBody,
                             generationConfig: { ...sentBody.generationConfig, responseSchema: undefined }
                         };
+                    }
+                    if (res.status === 400 && think && /think/i.test(msg)) {   // model không nhận thinkingConfig -> thử lại chính model này, không kèm nó
+                        noThink.add(model);
+                        mi--;
+                        continue;
                     }
                     lastErr = makeError(msg, res.status === 429 ? 'quota' : 'fail');
                     continue;                                            // 404/429/5xx/400 -> thử model kế tiếp
@@ -100,12 +117,12 @@
         return parseJSON(text);
     }
 
-    async function chat({ system, contents, temperature = 0.7, maxOutputTokens = 2048, deadlineMs = 0 }) {
+    async function chat({ system, contents, temperature = 0.7, maxOutputTokens = 2048, deadlineMs = 0, fast = false }) {
         return request({
             systemInstruction: { parts: [{ text: system || '' }] },
             contents,
             generationConfig: { temperature, maxOutputTokens }
-        }, { deadlineMs });
+        }, { deadlineMs, fast });
     }
 
     window.ecoAI = { generateJSON, chat, parseJSON, hasKey: () => true };   // luôn có đường gọi: key cá nhân hoặc máy chủ

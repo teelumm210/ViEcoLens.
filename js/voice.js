@@ -193,10 +193,10 @@
     }
 
     // ---------- Đọc bằng giọng thiết bị ----------
-    function speakDevice(text, id, wait) {
+    function speakDevice(text, id, wait, lax) {
         if (!synth) { toast('Trình duyệt chưa hỗ trợ đọc to.'); finish(id); return; }
         const voice = getDeviceVoice();
-        if (!voice) { noViVoiceHint(); finish(id); return; }
+        if (!voice && !lax) { noViVoiceHint(); finish(id); return; }
 
         const parts = chunk(text, 120);
 
@@ -206,8 +206,8 @@
             if (i >= parts.length) { finish(id); return; }
 
             const u = new SpeechSynthesisUtterance(parts[i]);
-            u.voice = voice;
-            u.lang = voice.lang || 'vi-VN';
+            if (voice) u.voice = voice;
+            u.lang = (voice && voice.lang) || 'vi-VN';
             u.rate = settings.rate || 1;
             u.pitch = 1;
             u.volume = 1;
@@ -379,9 +379,10 @@
         } catch (e) {
             if (id !== speakId) return;
             console.warn('[Voice] Gemini TTS:', e);
-            if (!played && getDeviceVoice()) {                           // dự phòng: giọng tiếng Việt của thiết bị
+            const blocked = e && e.name === 'NotAllowedError';
+            if ((!played || blocked) && synth && e.code !== 'nokey' && e.code !== 'badkey') {   // dự phòng: giọng của thiết bị (kể cả khi chưa có nhãn tiếng Việt)
                 toast('Giọng AI chưa dùng được, chuyển sang giọng của thiết bị.');
-                speakDevice(text, id, false);
+                speakDevice(text, id, false, true);
                 return;
             }
             if (e && e.name === 'NotAllowedError') toast('Trình duyệt chặn tự phát âm thanh. Hãy bấm nút "Đọc to".');
@@ -417,8 +418,6 @@
         try { document.dispatchEvent(new CustomEvent('eco:tts-start')); } catch (e) { /* bỏ qua */ }
 
         const engine = resolveEngine();
-        if (engine === 'none') { noViVoiceHint(); if (opts && opts.onDone) opts.onDone(); return; }
-
         const id = ++speakId;
         doneCb = (opts && opts.onDone) || null;
         currentSource = source || null;
@@ -426,6 +425,7 @@
         refreshUI();
 
         if (engine === 'gemini') speakGemini(text, id);
+        else if (engine === 'none') speakDevice(text, id, wasActive, true);
         else speakDevice(text, id, wasActive);
     }
 
@@ -679,6 +679,7 @@
     // API công khai
     window.ecoVoice = {
         speak,
+        unlock: unlockAudio,
         speakReply,
         speakScanResult,
         speakCreative,
