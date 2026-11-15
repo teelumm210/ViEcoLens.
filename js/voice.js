@@ -1,5 +1,5 @@
 /**
- * ViGreen - voice.js
+ * ViEcoLens - voice.js
  * ĐỌC TO tiếng Việt (text-to-speech). Module này CHỈ lo phần đọc.
  *   - Giọng nói -> chữ ở ô chat: js/stt.js (window.ecoSTT)
  *   - Voice chat realtime (Greeny Live): js/live.js (có bộ nhận giọng riêng)

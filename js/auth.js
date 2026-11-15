@@ -159,6 +159,7 @@
         setSession(acc.username);
         window.ecoState?.loadAccount(acc);
         refreshAccountUI();
+        scheduleSync(800);
     }
 
     function logout() {
@@ -185,9 +186,85 @@
         }));
         acc.updatedAt = Date.now();
         writeAccounts(accounts);
+        if (acc.points !== lastSyncedPoints) scheduleSync();
     }
 
     const isSignedIn = () => !!currentUsername || guestMode;
+
+    // ---------- Bảng xếp hạng thật (máy chủ: /api/leaderboard) ----------
+    // Trình duyệt gửi điểm của chính tài khoản đang đăng nhập; token bí mật (sinh một lần, chỉ lưu băm ở máy chủ)
+    // đảm bảo người khác dùng trùng tên đăng nhập không ghi đè được điểm của bạn.
+    const LB_URL = '/api/leaderboard';
+    let syncTimer = null;
+    let lastSyncedPoints = null;
+    const idCache = {};
+
+    async function sha256Hex(str) {
+        const buf = await crypto.subtle.digest('SHA-256', encoder.encode(str));
+        return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    // Mã công khai của tài khoản trên bảng xếp hạng (không lộ tên đăng nhập); phải khớp hàm idOf() ở máy chủ.
+    async function getPublicId() {
+        if (!currentUsername || !hasCrypto) return '';
+        if (!idCache[currentUsername]) idCache[currentUsername] = (await sha256Hex('user:' + currentUsername)).slice(0, 16);
+        return idCache[currentUsername];
+    }
+
+    function ensureLbToken() {
+        const accounts = readAccounts();
+        const acc = accounts[keyOf(currentUsername)];
+        if (!acc) return '';
+        if (!/^[a-f0-9]{32}$/.test(acc.lbToken || '')) {
+            acc.lbToken = Array.from(crypto.getRandomValues(new Uint8Array(16))).map((b) => b.toString(16).padStart(2, '0')).join('');
+            writeAccounts(accounts);
+        }
+        return acc.lbToken;
+    }
+
+    function scheduleSync(delay = 1500) {
+        if (!currentUsername || !hasCrypto) return;
+        clearTimeout(syncTimer);
+        syncTimer = setTimeout(() => { syncScore(); }, delay);
+    }
+
+    async function syncScore(opts = {}) {
+        if (!currentUsername || !hasCrypto || !window.ecoState) return;
+        clearTimeout(syncTimer);
+        const points = Math.max(0, Math.floor(Number(window.ecoState.points) || 0));
+        try {
+            const token = ensureLbToken();
+            if (!token) return;
+            const res = await fetch(LB_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: currentUsername,
+                    displayName: window.ecoState.displayName(),
+                    points,
+                    token
+                }),
+                keepalive: !!opts.keepalive
+            });
+            if (res.ok) {
+                lastSyncedPoints = points;
+                if (!opts.keepalive) window.ecoState.loadLeaderboard?.();
+            } else {
+                console.warn('[Auth] Không đồng bộ được điểm lên bảng xếp hạng:', res.status);
+            }
+        } catch (e) {
+            console.warn('[Auth] Đồng bộ bảng xếp hạng lỗi (offline?):', e);
+        }
+    }
+
+    // Dùng khi không gọi được máy chủ: các tài khoản thật đã tạo trên thiết bị/trình duyệt này.
+    function localBoard() {
+        const accounts = readAccounts();
+        return Object.keys(accounts).map((k) => {
+            const a = accounts[k];
+            return { id: 'local:' + a.username, name: a.displayName || a.username, points: Number(a.points) || 0, isCurrent: a.username === currentUsername };
+        });
+    }
 
     // ---------- Giao diện ----------
     function setError(msg) {
@@ -304,7 +381,11 @@
             }
         });
 
-        window.addEventListener('pagehide', () => { if (window.ecoState) persist(window.ecoState); });
+        window.addEventListener('pagehide', () => {
+            if (!window.ecoState) return;
+            persist(window.ecoState);
+            if (currentUsername && Math.floor(Number(window.ecoState.points) || 0) !== lastSyncedPoints) syncScore({ keepalive: true });
+        });
     }
 
     function init() {
@@ -317,6 +398,7 @@
             if (acc) {
                 currentUsername = acc.username;
                 window.ecoState?.loadAccount(acc);
+                scheduleSync(800);
             } else {
                 clearSession();
             }
@@ -344,6 +426,9 @@
         persist,
         isSignedIn,
         showPanel,
+        getPublicId,
+        syncScore,
+        localBoard,
         get currentUser() { return currentUsername; }
     };
 })();

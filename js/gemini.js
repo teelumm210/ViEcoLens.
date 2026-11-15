@@ -790,7 +790,7 @@ const GeminiManager = {
             this.appendChatMessage('Greeny đang soạn...', 'received', true);
 
             try {
-                let systemInstruction = "You are Greeny, a helpful AI assistant for the ViGreen app. You help users classify waste and learn about environmental protection. Answer in Vietnamese, keep it concise, polite, and engaging.";
+                let systemInstruction = "You are Greeny, a helpful AI assistant for the ViEcoLens app. You help users classify waste and learn about environmental protection. Answer in Vietnamese, keep it concise, polite, and engaging.";
 
                 if (this.currentContext && this.currentContext.name) {
                     systemInstruction += `\nThe user recently scanned: "${this.currentContext.name}" (${this.currentContext.tag}).`;

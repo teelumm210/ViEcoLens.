@@ -55,6 +55,8 @@ document.addEventListener('DOMContentLoaded', () => {
             window.ecoCamera?.stop();
         }
  
+        if (targetId === 'leaderboard-screen') window.ecoState?.loadLeaderboard();
+
         if (targetId === 'map-screen') {
             if (window.EcoMapModule) window.EcoMapModule.init();
         }

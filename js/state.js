@@ -89,13 +89,7 @@ const StateManager = {
         const lbEl = document.getElementById('leaderboard-user-points');
         if (lbEl) lbEl.innerHTML = `${formatted} <i class="fa-solid fa-leaf text-green"></i>`;
  
-        this.renderLeaderboard([
-            { id: 1, name: 'Nguyễn Anh', points: 3450, avatar: 'https://i.pravatar.cc/150?u=13' },
-            { id: 2, name: this.displayName(), points: this.points, avatar: null, isCurrent: true },
-            { id: 3, name: 'Trần Linh', points: 980, avatar: 'https://i.pravatar.cc/150?u=4' },
-            { id: 4, name: 'Bảo Trâm', points: 850, avatar: 'https://i.pravatar.cc/150?u=5' },
-            { id: 5, name: 'Nguyễn Lâm', points: 720, avatar: 'https://i.pravatar.cc/150?u=2' },
-        ], 2);
+        this.renderLeaderboard();
     },
  
     showPointsBadge(amount) {
@@ -170,6 +164,7 @@ const StateManager = {
         this.renderHistory();
         this.updateAllUI();
         this.updateChart();
+        this.loadLeaderboard();     // biết "bạn là ai" để đánh dấu đúng dòng của mình
     },
 
     escapeHtml(str) {
@@ -321,56 +316,87 @@ const StateManager = {
         this.barChartInstance.update();
     },
  
-    // ---- Leaderboard ----
+    // ---- Leaderboard (người dùng thật) ----
+    // Nguồn dữ liệu: máy chủ (/api/leaderboard, các tài khoản đã đăng ký ở mọi thiết bị).
+    // Nếu không gọi được máy chủ: dùng các tài khoản thật có trong trình duyệt này.
+    lbUsers: [],
+    lbMe: null,
+    lbMyId: '',
+    lbSource: 'none',
+    _lbSeq: 0,
+
     async loadLeaderboard() {
+        const seq = ++this._lbSeq;
+        const auth = window.ecoAuth;
+        let myId = '';
+        try { myId = auth?.currentUser ? await auth.getPublicId() : ''; } catch (e) { myId = ''; }
+
         try {
-            const res = await fetch('/api/leaderboard');
+            const res = await fetch('/api/leaderboard' + (myId ? `?id=${myId}` : ''), { cache: 'no-store' });
+            if (!res.ok || !(res.headers.get('content-type') || '').includes('json')) throw new Error('HTTP ' + res.status);
             const data = await res.json();
-            this.renderLeaderboard(data.leaderboard, data.currentUserRank);
+            if (seq !== this._lbSeq) return;
+            this.lbUsers = Array.isArray(data.leaderboard) ? data.leaderboard : [];
+            this.lbMe = data.me || null;
+            this.lbMyId = myId;
+            this.lbSource = 'server';
         } catch (e) {
-            console.warn('Could not load leaderboard from API, using defaults');
-            this.renderLeaderboard([
-                { id: 1, name: 'Nguyễn Anh', points: 3450, avatar: 'https://i.pravatar.cc/150?u=13' },
-                { id: 2, name: this.displayName(), points: this.points, avatar: null, isCurrent: true },
-                { id: 3, name: 'Trần Linh', points: 980, avatar: 'https://i.pravatar.cc/150?u=4' },
-                { id: 4, name: 'Bảo Trâm', points: 850, avatar: 'https://i.pravatar.cc/150?u=5' },
-                { id: 5, name: 'Nguyễn Lâm', points: 720, avatar: 'https://i.pravatar.cc/150?u=2' },
-            ], 2);
+            if (seq !== this._lbSeq) return;
+            console.warn('Không tải được bảng xếp hạng từ máy chủ, dùng tài khoản có trên thiết bị này:', e);
+            this.lbUsers = auth?.localBoard ? auth.localBoard() : [];
+            this.lbMe = null;
+            this.lbMyId = '';
+            this.lbSource = 'local';
         }
+        this.renderLeaderboard();
     },
- 
-    renderLeaderboard(users, currentRank) {
- 
-        users = users.map(u => u.isCurrent ? { ...u, points: this.points } : u);
-        const sorted = [...users].sort((a, b) => b.points - a.points);
- 
+
+    renderLeaderboard() {
+        const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        const signedIn = !!this.currentUser;
+
+        // Đánh dấu "Bạn" và dùng điểm hiện tại của bạn (mới hơn dữ liệu máy chủ)
+        let users = (this.lbUsers || []).map((u) => {
+            const isCurrent = signedIn && (u.isCurrent || (this.lbMyId && u.id === this.lbMyId));
+            return isCurrent ? { ...u, points: this.points, isCurrent: true } : { ...u };
+        });
+        // Bạn chưa có trong danh sách (hạng ngoài top, hoặc chưa kịp đồng bộ) -> thêm vào để vẫn thấy hạng của mình
+        if (signedIn && !users.some((u) => u.isCurrent) && (this.lbSource !== 'server' || this.lbMyId)) {
+            users.push({ id: 'me', name: this.displayName(), points: this.points, isCurrent: true });
+        }
+        const sorted = users.sort((a, b) => b.points - a.points);
+
         const podium = document.getElementById('podium-section');
         if (podium) {
-            const top3 = sorted.slice(0, 3);
-            const display = top3.length >= 3 ? [top3[1], top3[0], top3[2]] : top3;
-            const rankClasses = top3.length >= 3 ? ['rank-2', 'rank-1', 'rank-3'] : ['rank-1', 'rank-2', 'rank-3'];
-            const sizes = top3.length >= 3 ? ['normal', 'large', 'normal'] : ['large', 'normal', 'normal'];
- 
-            podium.innerHTML = display.map((user, i) => {
-                const rankIdx = top3.indexOf(user);
-                const avatarHtml = user.avatar && user.avatar.startsWith('http')
-                    ? `<img src="${user.avatar}" alt="${user.name}">`
-                    : `<i class="fa-regular fa-user" style="color:var(--primary-dark)"></i>`;
-                const crownHtml = rankIdx === 0 ? `<div class="podium-crown">👑</div>` : '';
-                const rankLabel = rankIdx + 1;
-                return `
+            if (!sorted.length) {
+                podium.innerHTML = '<p class="text-muted" style="text-align:center;width:100%;margin:12px 0">Chưa có tài khoản nào trên bảng xếp hạng.</p>';
+            } else {
+                const top3 = sorted.slice(0, 3);
+                const display = top3.length >= 3 ? [top3[1], top3[0], top3[2]] : top3;
+                const rankClasses = top3.length >= 3 ? ['rank-2', 'rank-1', 'rank-3'] : ['rank-1', 'rank-2', 'rank-3'];
+                const sizes = top3.length >= 3 ? ['normal', 'large', 'normal'] : ['large', 'normal', 'normal'];
+
+                podium.innerHTML = display.map((user, i) => {
+                    const rankIdx = top3.indexOf(user);
+                    const avatarHtml = user.avatar && user.avatar.startsWith('http')
+                        ? `<img src="${esc(user.avatar)}" alt="${esc(user.name)}">`
+                        : `<i class="fa-regular fa-user" style="color:var(--primary-dark)"></i>`;
+                    const crownHtml = rankIdx === 0 ? `<div class="podium-crown">👑</div>` : '';
+                    const rankLabel = rankIdx + 1;
+                    return `
                     <div class="podium-item">
                         ${crownHtml}
-                        <div class="podium-avatar ${user.isCurrent ? 'bg-light-green' : 'bg-light-green'}" 
+                        <div class="podium-avatar bg-light-green"
                              style="${sizes[i] === 'large' ? 'width:68px;height:68px;' : ''}">${avatarHtml}</div>
-                        <div class="podium-name">${user.isCurrent ? 'Bạn' : user.name.split(' ').pop()}</div>
+                        <div class="podium-name">${user.isCurrent ? 'Bạn' : esc(user.name.split(' ').pop())}</div>
                         <div class="podium-score">${user.points.toLocaleString('vi-VN')}</div>
                         <div class="podium-rank-badge ${rankClasses[i]}">${rankLabel}</div>
                     </div>
                 `;
-            }).join('');
+                }).join('');
+            }
         }
- 
+
         const list = document.getElementById('leaderboard-list');
         if (list) {
             const rest = sorted.slice(3);
@@ -380,13 +406,13 @@ const StateManager = {
                 list.innerHTML = rest.map((user, i) => {
                     const rank = i + 4;
                     const avatarHtml = user.avatar && user.avatar.startsWith('http')
-                        ? `<img src="${user.avatar}" alt="${user.name}">`
+                        ? `<img src="${esc(user.avatar)}" alt="${esc(user.name)}">`
                         : `<i class="fa-regular fa-user"></i>`;
                     return `
                         <div class="board-item ${user.isCurrent ? 'highlight-user border-green' : ''}">
                             <div class="rank-num text-muted">${rank}</div>
                             <div class="user-avatar ${user.isCurrent ? 'bg-light-green text-green' : 'bg-light-green'}">${avatarHtml}</div>
-                            <div class="user-name">${user.isCurrent ? 'Bạn' : user.name}</div>
+                            <div class="user-name">${user.isCurrent ? 'Bạn' : esc(user.name)}</div>
                             <div class="user-score ${user.isCurrent ? 'text-green' : ''}">
                                 ${user.points.toLocaleString('vi-VN')} <i class="fa-solid fa-leaf text-green"></i>
                             </div>
@@ -395,12 +421,15 @@ const StateManager = {
                 }).join('');
             }
         }
- 
+
         const banner = document.getElementById('current-rank-banner');
         const rankText = document.getElementById('current-rank-text');
         if (banner && rankText) {
-            const myRank = sorted.findIndex(u => u.isCurrent) + 1 || currentRank;
-            rankText.innerText = `#${myRank}`;
+            const idx = sorted.findIndex((u) => u.isCurrent);
+            // Khách (chưa đăng nhập) không nằm trong bảng xếp hạng
+            rankText.innerText = !signedIn ? '—'
+                : (this.lbMe && this.lbMe.rank && sorted.length >= 50 && idx >= 49) ? `#${this.lbMe.rank}`
+                    : `#${idx + 1}`;
         }
     }
 };

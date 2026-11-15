@@ -1,5 +1,5 @@
 /**
- * ViGreen - stt.js
+ * ViEcoLens - stt.js
  * GIỌNG NÓI -> CHỮ ở ô chat (SpeechRecognition). Đây là chức năng RIÊNG:
  *   - Chỉ chuyển lời nói thành chữ trong ô #chat-input (hiện chữ ngay khi đang nói).
  *   - Không đọc to câu trả lời. Việc đọc to do js/voice.js lo (nút "Đọc to" / "Tự động đọc").

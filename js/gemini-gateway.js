@@ -1,5 +1,5 @@
 /**
- * ViGreen - gemini-gateway.js
+ * ViEcoLens - gemini-gateway.js
  * Cổng gọi Gemini duy nhất cho toàn app (gemini.js, ai.js, voice.js dùng chung).
  * Đối tượng công khai: window.ecoGeminiGateway
  * (KHÔNG đặt tên ecoGemini: tên đó đã dùng cho GeminiManager trong gemini.js).
