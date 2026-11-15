@@ -361,7 +361,12 @@
     }
 
     async function speakGemini(text, id) {
-        const parts = chunk(text, 220);                                  // đoạn dài hơn để ít lần gọi API
+        let parts = chunk(text, 220);                                    // đoạn dài hơn để ít lần gọi API
+        if (parts.length && parts[0].length > 110) {                     // đoạn ĐẦU ngắn hơn -> Gemini tạo âm thanh xong sớm, nghe được tiếng nhanh hơn
+            const first = chunk(parts[0], 100)[0];
+            const rest = text.slice(text.indexOf(first) + first.length).trim();
+            if (first && first.length < parts[0].length && rest) parts = [first, ...chunk(rest, 220)];
+        }
         let played = false;
         try {
             let pending = geminiAudio(parts[0]);

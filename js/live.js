@@ -12,7 +12,9 @@
     'use strict';
 
     const TARGET_FRAME_MS = 120;        // nhịp vòng lặp phát hiện (nhanh hơn nếu máy kịp)
-    const WORK_MAX = 640;               // cạnh dài tối đa của ảnh đưa vào YOLO / gửi Gemini
+    const WORK_MAX = 640;               // cạnh dài tối đa của ảnh đưa vào YOLO
+    const SEND_MAX = 512;               // cạnh dài tối đa của ảnh gửi Gemini (nhỏ hơn -> tải lên nhanh trên 4G, Gemini vẫn nhìn rõ)
+    const SEND_QUALITY = 0.55;
     const MAX_TRACKS = 12;
     // minHits/showConf: chỉ hiện vật đã thấy ổn định qua >=3 khung và đủ chắc chắn -> bớt nhận sai thoáng qua.
     // voteDecay: nhãn của mỗi vật được "bỏ phiếu" theo thời gian, nhãn mới phải vượt trội mới đổi (tránh nhảy chai <-> cốc).
@@ -382,7 +384,16 @@
         const video = $('live-video');
         if (!video || !video.videoWidth) return null;
         try {
-            const url = drawToWork(video).toDataURL('image/jpeg', 0.6);
+            const vw = video.videoWidth;
+            const vh = video.videoHeight;
+            const scale = Math.min(1, SEND_MAX / Math.max(vw, vh));
+            const w = Math.max(1, Math.round(vw * scale));
+            const h = Math.max(1, Math.round(vh * scale));
+            if (!S.sendCanvas) S.sendCanvas = document.createElement('canvas');
+            if (S.sendCanvas.width !== w) S.sendCanvas.width = w;
+            if (S.sendCanvas.height !== h) S.sendCanvas.height = h;
+            S.sendCanvas.getContext('2d').drawImage(video, 0, 0, w, h);
+            const url = S.sendCanvas.toDataURL('image/jpeg', SEND_QUALITY);
             return url.split(',')[1] || null;
         } catch (e) {
             return null;
@@ -414,7 +425,12 @@
         }
         if (!S.running) return;
         const dt = performance.now() - t0;
-        S.loopTimer = setTimeout(loop, Math.max(30, TARGET_FRAME_MS - dt));
+        // Nhận diện chạy trên luồng chính: nếu mỗi khung tốn nhiều thời gian, nghỉ tương ứng để trình duyệt kịp
+        // xử lý micro, mạng, giọng đọc và cảm ứng. Khi đang hỏi đáp (nghe/nghĩ/nói) nghỉ nhiều hơn để ưu tiên phản hồi.
+        const busy = S.state !== 'idle';
+        const breathe = S.avgInferMs > 250 ? S.avgInferMs * (busy ? 1.2 : 0.35) : 0;
+        const wait = Math.max(busy ? 120 : 30, TARGET_FRAME_MS - dt, breathe);
+        S.loopTimer = setTimeout(loop, wait);
     }
 
     async function openCamera() {
@@ -567,9 +583,9 @@
             const reply = await Promise.race([
                 ai.chat({
                     system: buildSystem(),
-                    contents: [...S.history.slice(-6), { role: 'user', parts }],
+                    contents: [...S.history.slice(-4), { role: 'user', parts }],
                     temperature: 0.6,
-                    maxOutputTokens: 1024,
+                    maxOutputTokens: 300,
                     fast: true,
                     deadlineMs: ASK_DEADLINE_MS
                 }),
@@ -605,7 +621,7 @@
     function afterReply(id, ok) {
         if (id !== S.askId || !S.running) return;
         clearTimeout(S.speakTimer);
-        if (S.voice && ok) setTimeout(() => { if (id === S.askId && S.voice && S.running && S.state !== 'listening') beginListening(); }, 350);
+        if (S.voice && ok) setTimeout(() => { if (id === S.askId && S.voice && S.running && S.state !== 'listening') beginListening(); }, 150);
         else setState('idle');
     }
 
@@ -649,7 +665,7 @@
             clearTimeout(silenceTimer);
             const last = e.results[e.results.length - 1];
             if (last && last.isFinal) { deliver(); stopRec(); }
-            else silenceTimer = setTimeout(() => { deliver(); stopRec(); }, 1600);
+            else silenceTimer = setTimeout(() => { deliver(); stopRec(); }, 1000);
         };
         rec.onerror = (e) => { if (e.error !== 'aborted' && onError) onError(e); };
         rec.onend = finish;
@@ -704,7 +720,7 @@
                         setState('idle');
                         return;
                     }
-                    setTimeout(beginListening, 400);
+                    setTimeout(beginListening, 200);
                 } else if (!S.voice && S.state === 'listening') setState('idle');
             }
         });

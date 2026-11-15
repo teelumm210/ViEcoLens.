@@ -66,34 +66,52 @@ const GeminiManager = {
         }
     },
 
-    async callGeminiAPI(systemInstruction, contents, temperature = 0.7) {
+    // opts.fast: giảm bước "suy nghĩ" nội bộ của model (chat, nhận diện) để trả lời nhanh hơn.
+    // opts.maxOutputTokens: giới hạn độ dài câu trả lời (chat ngắn gọn -> về sớm hơn).
+    async callGeminiAPI(systemInstruction, contents, temperature = 0.7, opts = {}) {
         // Thứ tự: model nhanh còn được cấp -> model mạnh hơn -> alias mới nhất -> model cũ.
         // (gemini-2.0-* đã ngừng; gemini-2.5-* chỉ còn với tài khoản đã dùng từ trước -> key mới có thể báo 404.)
-        // Model không tồn tại chỉ mất ~0,4 giây rồi tự chuyển sang model kế tiếp.
-        const modelsToTry = [
+        // Model chạy tốt lần trước được đưa lên đầu; model đã 404 được bỏ qua một thời gian -> không mất vòng mạng vô ích.
+        const gw = window.ecoGeminiGateway;
+        const modelsToTry = gw.orderModels([
             'gemini-3.5-flash-lite',
             'gemini-3.8-flash',
             'gemini-flash-latest',
             'gemini-2.5-flash'
-        ];
+        ]);
 
+        const generationConfig = { temperature: temperature };
+        if (opts.maxOutputTokens) generationConfig.maxOutputTokens = opts.maxOutputTokens;
         const body = {
             systemInstruction: { parts: [{ text: systemInstruction }] },
             contents: contents,
-            generationConfig: { temperature: temperature }
+            generationConfig
         };
 
+        this._noThink = this._noThink || new Set();
         let lastError = null;
 
-        for (const model of modelsToTry) {
+        for (let mi = 0; mi < modelsToTry.length; mi++) {
+            const model = modelsToTry[mi];
+            const think = opts.fast && !this._noThink.has(model) ? gw.thinkingFor(model) : null;
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 28000);
             try {
                 console.log(`[Gemini] Đang thử model: ${model}...`);
-                const res = await window.ecoGeminiGateway.generateContent(model, body);
+                const sendBody = think ? { ...body, generationConfig: { ...generationConfig, thinkingConfig: think } } : body;
+                const res = await gw.generateContent(model, sendBody, { signal: ctrl.signal });
 
                 if (!res.ok) {
                     const errBody = await res.json().catch(() => ({}));
                     const errMsg = errBody.error?.message || 'Lỗi kết nối';
-                    if (window.ecoGeminiGateway.isNoKeyError(errBody)) throw new Error('Chưa cấu hình API key trên máy chủ. Hãy nhập API Key cá nhân trong Setting.');
+                    if (gw.isNoKeyError(errBody)) throw new Error('Chưa cấu hình API key trên máy chủ. Hãy nhập API Key cá nhân trong Setting.');
+
+                    if (think && res.status === 400 && /think/i.test(errMsg)) {   // model không nhận thinkingConfig -> thử lại chính nó, không kèm
+                        this._noThink.add(model);
+                        mi--;
+                        continue;
+                    }
+                    if (res.status === 404) gw.markDead(model);
 
                     if (res.status === 503 || errMsg.toLowerCase().includes('high demand') || errMsg.toLowerCase().includes('overloaded')) {
                         console.warn(`[Gemini] Model ${model} đang quá tải, chuyển sang model dự phòng...`);
@@ -110,14 +128,20 @@ const GeminiManager = {
                 }
 
                 console.log(`[Gemini] Thành công với model: ${model}`);
-                return data.candidates[0].content.parts[0].text;
+                gw.markGood(model);
+                const parts = (data.candidates[0].content?.parts || []).filter((p) => !p.thought && typeof p.text === 'string');
+                return (parts.length ? parts : data.candidates[0].content.parts).map((p) => p.text || '').join('');
 
             } catch (err) {
-                if (err.message !== 'Gemini không phản hồi dữ liệu hợp lệ' && !err.message.includes('API key')) {
+                if (err.name === 'AbortError') {
+                    lastError = new Error('Gemini phản hồi quá lâu.');
+                } else if (err.message !== 'Gemini không phản hồi dữ liệu hợp lệ' && !err.message.includes('API key')) {
                     lastError = err;
                 } else {
                     throw err;
                 }
+            } finally {
+                clearTimeout(timer);
             }
         }
 
@@ -191,7 +215,7 @@ const GeminiManager = {
                 ]
             }];
 
-            const aiText = await this.callGeminiAPI(MULTI_SYSTEM_INSTRUCTION, contents, 0.4);
+            const aiText = await this.callGeminiAPI(MULTI_SYSTEM_INSTRUCTION, contents, 0.4, { fast: true });
             const m = aiText.match(/\[[\s\S]*\]/);
             let parsed = this.parseJSONResponse(m ? m[0] : aiText);
             if (parsed && !Array.isArray(parsed)) parsed = parsed.items || parsed.objects || [parsed];
@@ -373,7 +397,7 @@ const GeminiManager = {
                 ]
             }];
 
-            const aiText = await this.callGeminiAPI(YOLO_ENHANCED_INSTRUCTION, contents, 0.4);
+            const aiText = await this.callGeminiAPI(YOLO_ENHANCED_INSTRUCTION, contents, 0.4, { fast: true });
             const resultJson = this.parseJSONResponse(aiText);
 
             resultJson.tag = resultJson.tag || 'KHÔNG RÕ';
@@ -467,7 +491,7 @@ const GeminiManager = {
                 ]
             }];
 
-            const aiText = await this.callGeminiAPI(VISION_SYSTEM_INSTRUCTION, contents, 0.4);
+            const aiText = await this.callGeminiAPI(VISION_SYSTEM_INSTRUCTION, contents, 0.4, { fast: true });
             const resultJson = this.parseJSONResponse(aiText);
 
             resultJson.tag = resultJson.tag || 'KHÔNG RÕ';
@@ -808,7 +832,7 @@ const GeminiManager = {
                     parts: [{ text: text }]
                 }];
 
-                const replyText = await this.callGeminiAPI(systemInstruction, contents, 0.7);
+                const replyText = await this.callGeminiAPI(systemInstruction, contents, 0.7, { fast: true, maxOutputTokens: 700 });
 
                 this.removeTypingIndicator();
                 this.appendChatMessage(replyText, 'received');

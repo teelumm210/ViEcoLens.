@@ -251,20 +251,14 @@ const YoloDetector = {
         const imageData = ctx.getImageData(0, 0, this.inputSize, this.inputSize);
         const pixels = imageData.data;
 
-        const red = new Float32Array(this.inputSize * this.inputSize);
-        const green = new Float32Array(this.inputSize * this.inputSize);
-        const blue = new Float32Array(this.inputSize * this.inputSize);
-
-        for (let i = 0; i < this.inputSize * this.inputSize; i++) {
-            red[i] = pixels[i * 4] / 255.0;
-            green[i] = pixels[i * 4 + 1] / 255.0;
-            blue[i] = pixels[i * 4 + 2] / 255.0;
+        // Điền thẳng vào một mảng (kênh R | G | B liên tiếp), không tạo 3 mảng trung gian -> nhanh hơn, ít rác bộ nhớ trên điện thoại.
+        const plane = this.inputSize * this.inputSize;
+        const tensorData = new Float32Array(3 * plane);
+        for (let i = 0, p = 0; i < plane; i++, p += 4) {
+            tensorData[i] = pixels[p] / 255.0;
+            tensorData[plane + i] = pixels[p + 1] / 255.0;
+            tensorData[2 * plane + i] = pixels[p + 2] / 255.0;
         }
-
-        const tensorData = new Float32Array(3 * this.inputSize * this.inputSize);
-        tensorData.set(red, 0);
-        tensorData.set(green, this.inputSize * this.inputSize);
-        tensorData.set(blue, 2 * this.inputSize * this.inputSize);
 
         const tensor = new ort.Tensor('float32', tensorData, [1, 3, this.inputSize, this.inputSize]);
 

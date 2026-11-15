@@ -3,3 +3,9 @@
 
 [functions]
   directory = "netlify/functions"
+
+# Mô hình AI nặng (50 MB+): cho trình duyệt giữ 7 ngày để lần mở sau (nhất là trên điện thoại) không phải tải lại.
+[[headers]]
+  for = "/models/*"
+  [headers.values]
+    Cache-Control = "public, max-age=604800"

@@ -20,11 +20,8 @@
     // Gọi generateContent, thử lần lượt các model. Trả về chuỗi văn bản của ứng viên đầu tiên.
     // opts.deadlineMs: tổng thời gian tối đa cho cả chuỗi thử model (trò chuyện live cần trả lời nhanh, không chờ cả phút).
     const noThink = new Set();
-    function thinkingFor(model) {
-        if (/^gemini-3/.test(model)) return { thinkingLevel: 'minimal' };
-        if (/^gemini-2\.5-flash/.test(model)) return { thinkingBudget: 0 };
-        return null;
-    }
+    const gw = () => window.ecoGeminiGateway;
+    const thinkingFor = (model) => gw().thinkingFor(model);
 
     async function request(body, opts = {}) {
         let lastErr = null;
@@ -32,8 +29,9 @@
         const startedAt = Date.now();
         const deadline = opts.deadlineMs || 0;
 
-        for (let mi = 0; mi < MODELS.length; mi++) {
-            const model = MODELS[mi];
+        const order = gw().orderModels(MODELS);                  // model chạy tốt lần trước đứng đầu, model đã 404 được bỏ qua
+        for (let mi = 0; mi < order.length; mi++) {
+            const model = order[mi];
             const left = deadline ? deadline - (Date.now() - startedAt) : TIMEOUT_MS;
             if (left < 2500) { lastErr = lastErr || makeError('Gemini phản hồi quá lâu.', 'timeout'); break; }
             const ctrl = new AbortController();
@@ -67,16 +65,19 @@
                         mi--;
                         continue;
                     }
+                    if (res.status === 404 || (res.status === 400 && /not (found|supported)|no longer/i.test(msg))) gw().markDead(model);
                     lastErr = makeError(msg, res.status === 429 ? 'quota' : 'fail');
                     continue;                                            // 404/429/5xx/400 -> thử model kế tiếp
                 }
 
                 const data = await res.json();
                 const text = (data.candidates?.[0]?.content?.parts || [])
+                    .filter((p) => !p.thought)
                     .map((p) => p.text || '')
                     .join('')
                     .trim();
                 if (!text) { lastErr = makeError('Gemini không trả về nội dung.', 'empty'); continue; }
+                gw().markGood(model);
                 return text;
             } catch (e) {
                 if (e.code === 'badkey' || e.code === 'nokey') throw e;

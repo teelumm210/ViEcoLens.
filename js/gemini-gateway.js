@@ -37,8 +37,35 @@
         });
     }
 
+
+    // ---- Nhớ model đang chạy tốt (đỡ mất 1-3 vòng mạng mỗi lần hỏi khi model đầu danh sách lỗi/không tồn tại) ----
+    const GOOD_KEY = 'eco_gemini_good_model';
+    const dead = new Map();                       // model -> thời điểm được thử lại (404/không hỗ trợ: nghỉ 10 phút)
+    let good = '';
+    try { good = sessionStorage.getItem(GOOD_KEY) || ''; } catch (e) { /* bỏ qua */ }
+
+    function orderModels(list) {
+        const now = Date.now();
+        const alive = list.filter((m) => !(dead.get(m) > now));
+        const base = alive.length ? alive : list;                 // tất cả đều "chết" thì vẫn thử lại hết
+        return good && base.includes(good) ? [good, ...base.filter((m) => m !== good)] : base;
+    }
+    function markGood(model) {
+        good = model;
+        dead.delete(model);
+        try { sessionStorage.setItem(GOOD_KEY, model); } catch (e) { /* bỏ qua */ }
+    }
+    function markDead(model, ms = 600000) { dead.set(model, Date.now() + ms); if (good === model) good = ''; }
+
+    // Giảm bước "suy nghĩ" nội bộ để trả lời nhanh (model nào không hỗ trợ trả 400 -> nơi gọi thử lại không kèm nó).
+    function thinkingFor(model) {
+        if (/^gemini-3/.test(model)) return { thinkingLevel: 'minimal' };
+        if (/^gemini-2\.5-flash/.test(model)) return { thinkingBudget: 0 };
+        return null;
+    }
+
     // Máy chủ báo chưa cấu hình key hệ thống (status NOKEY).
     const isNoKeyError = (errBody) => !!errBody && !!errBody.error && errBody.error.status === 'NOKEY';
 
-    window.ecoGeminiGateway = { generateContent, hasOwnKey: () => !!ownKey(), isNoKeyError };
+    window.ecoGeminiGateway = { generateContent, hasOwnKey: () => !!ownKey(), isNoKeyError, orderModels, markGood, markDead, thinkingFor };
 })();
