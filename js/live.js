@@ -32,7 +32,7 @@
 
     function keepDetection(d) {
         if (!d || !d.bboxRel || LIVE_IGNORE.has(d.class)) return false;
-        if (d.confidence < MIN_DET_CONF) return false;
+        if (d.confidence < (S.minDetConf ?? MIN_DET_CONF)) return false;
         const area = d.bboxRel.width * d.bboxRel.height;
         return area >= MIN_AREA && area <= MAX_AREA;
     }
@@ -55,8 +55,30 @@
         sandwich: 'huu_co', 'hot dog': 'huu_co', pizza: 'huu_co', donut: 'huu_co', cake: 'huu_co', 'potted plant': 'huu_co',
         laptop: 'nguy_hiem', 'cell phone': 'nguy_hiem', keyboard: 'nguy_hiem', mouse: 'nguy_hiem',
         remote: 'nguy_hiem', tv: 'nguy_hiem', microwave: 'nguy_hiem', oven: 'nguy_hiem',
-        toaster: 'nguy_hiem', 'hair drier': 'nguy_hiem', clock: 'nguy_hiem'
+        toaster: 'nguy_hiem', 'hair drier': 'nguy_hiem', clock: 'nguy_hiem',
+        // Mô hình rác riêng (8 nhóm chất liệu)
+        cardboard: 'tai_che', paper: 'tai_che', glass: 'tai_che', metal: 'tai_che', plastic: 'tai_che',
+        organic: 'huu_co', 'e-waste': 'nguy_hiem', medical: 'nguy_hiem'
     };
+
+    // Mô hình rác chỉ biết CHẤT LIỆU và đoán chất liệu còn lẫn (kính <-> nhựa...): khi chưa đủ chắc chỉ nói tên nhóm thùng rác.
+    const MATERIAL_NAME_MIN_CONF = 0.6;
+    const isWasteModel = () => window.yoloDetector?.profileId === 'waste';
+    function nameOf(t) {
+        if (isWasteModel() && t.conf < MATERIAL_NAME_MIN_CONF) return `Vật ${GROUPS[t.group].label}`;
+        return t.classVi;
+    }
+
+    // Ngưỡng phụ thuộc mô hình: mô hình rác cho điểm tin cậy thấp hơn mô hình COCO.
+    function tuneForModel(avgInferMs) {
+        const waste = isWasteModel();
+        TRACK.showConf = waste ? 0.4 : 0.5;
+        S.minDetConf = waste ? 0.35 : 0.45;
+        // Mô hình nặng chạy chậm (vài giây/khung): giữ vật lâu hơn và chỉ cần thấy 2 lần là hiện.
+        const slow = avgInferMs > 700;
+        TRACK.minHits = slow ? 2 : 3;
+        TRACK.maxAgeMs = Math.max(900, Math.round(avgInferMs * 2.6));
+    }
 
     const groupOf = (cls) => WASTE_MAP[cls] || 'vo_co';
 
@@ -178,6 +200,8 @@
         askId: 0,
         work: null,
         selectedClass: null,          // lớp vật thể đang được chọn xem chi tiết
+        avgInferMs: 0,                // thời gian nhận diện trung bình mỗi khung (ms), để chỉnh bộ theo dõi
+        minDetConf: MIN_DET_CONF,
         chipSig: '',                  // chữ ký danh sách nhãn (chỉ dựng lại khi thay đổi, để chạm không bị mất)
         fails: 0,                     // số lần liên tiếp Gemini không trả lời được
         silent: 0,                    // số lượt nghe liên tiếp không có tiếng nói
@@ -240,7 +264,7 @@
         const t = list[0];
         const conf = scoreOf(t.group);
         const g = GROUPS[t.group];
-        $('live-detail-name').textContent = list.length > 1 ? `${t.classVi} ×${list.length}` : t.classVi;
+        $('live-detail-name').textContent = list.length > 1 ? `${nameOf(t)} ×${list.length}` : nameOf(t);
         const gl = $('live-detail-group');
         gl.textContent = `rác ${g.label} · ${conf}%`;
         gl.style.setProperty('--c', g.color);
@@ -267,7 +291,7 @@
         });
         if (S.selectedClass && !counts.has(S.selectedClass)) S.selectedClass = null;
 
-        const sig = [...counts.entries()].map(([k, v]) => `${k}:${v.n}`).join('|') + `#${S.selectedClass || ''}#${S.detectorReady ? 1 : 0}`;
+        const sig = [...counts.entries()].map(([k, v]) => `${k}:${v.n}:${nameOf(v.t)}`).join('|') + `#${S.selectedClass || ''}#${S.detectorReady ? 1 : 0}`;
         if (sig !== S.chipSig) {
             S.chipSig = sig;
             box.textContent = '';
@@ -276,7 +300,7 @@
                 chip.type = 'button';
                 chip.className = 'live-chip' + (S.selectedClass === cls ? ' active' : '');
                 chip.style.setProperty('--c', GROUPS[t.group].color);
-                chip.textContent = `${t.classVi}${n > 1 ? ' ×' + n : ''} · ${GROUPS[t.group].label}`;
+                chip.textContent = `${nameOf(t)}${n > 1 ? ' ×' + n : ''} · ${GROUPS[t.group].label}`;
                 chip.addEventListener('click', () => selectClass(cls));
                 box.appendChild(chip);
             });
@@ -327,7 +351,7 @@
             ctx.fill();
             ctx.stroke();
 
-            const label = `${t.classVi} ${scoreOf(t.group)}%`;
+            const label = `${nameOf(t)} ${scoreOf(t.group)}%`;
             ctx.font = '700 13px Inter, sans-serif';
             const tw = ctx.measureText(label).width;
             const ly = Math.max(0, b.y - 24);
@@ -373,7 +397,13 @@
             const video = $('live-video');
             if (video && video.videoWidth > 0 && video.readyState >= 2) {
                 if (S.detectorReady && window.yoloDetector) {
+                    const tInfer = performance.now();
                     const dets = await window.yoloDetector.detectFrame(drawToWork(video));
+                    if (dets) {
+                        const ms = performance.now() - tInfer;
+                        S.avgInferMs = S.avgInferMs ? S.avgInferMs * 0.7 + ms * 0.3 : ms;
+                        tuneForModel(S.avgInferMs);
+                    }
                     if (dets && S.running) S.tracks = updateTracks(S.tracks, dets.filter(keepDetection).slice(0, 12), Date.now());
                 }
                 render();

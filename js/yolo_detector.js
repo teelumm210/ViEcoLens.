@@ -63,31 +63,63 @@ const YoloDetector = {
         'bus': 'Xe buýt', 'truck': 'Xe tải', 'bird': 'Chim', 'cat': 'Mèo', 'dog': 'Chó'
     },
 
+    // Mô hình mặc định (YOLOv8n COCO) được giữ làm phương án dự phòng; mô hình rác riêng được ưu tiên.
+    // Đặt localStorage 'eco_yolo_model' = 'coco' để buộc dùng mô hình cũ.
     async init() {
         if (this.isLoading || this.isReady) return this.isReady;
         this.isLoading = true;
 
-        try {
-            console.log('[YOLO] Loading YOLOv8n ONNX model...');
-            const startTime = performance.now();
+        let order = [this._wasteProfile, this._cocoProfile];
+        try { if (localStorage.getItem('eco_yolo_model') === 'coco') order = [this._cocoProfile]; } catch (e) { /* bỏ qua */ }
+        if (this._forceCoco) order = [this._cocoProfile];
 
-            this.session = await ort.InferenceSession.create(this.modelPath, {
-                executionProviders: ['wasm'],
-                graphOptimizationLevel: 'all'
-            });
+        for (const profile of order) {
+            try {
+                console.log(`[YOLO] Loading model "${profile.id}" (${profile.modelPath})...`);
+                const startTime = performance.now();
 
-            const loadTime = ((performance.now() - startTime) / 1000).toFixed(1);
-            console.log(`[YOLO] Model loaded in ${loadTime}s`);
-            this.isReady = true;
-            this.isLoading = false;
-            this._updateStatusBadge('ready');
-            return true;
-        } catch (err) {
-            console.error('[YOLO] Failed to load model:', err);
-            this.isLoading = false;
-            this._updateStatusBadge('error');
-            return false;
+                this.session = await ort.InferenceSession.create(profile.modelPath, {
+                    executionProviders: ['wasm'],
+                    graphOptimizationLevel: 'all'
+                });
+
+                this._applyProfile(profile);
+
+                const loadTime = ((performance.now() - startTime) / 1000).toFixed(1);
+                console.log(`[YOLO] Model "${profile.id}" loaded in ${loadTime}s`);
+                this.isReady = true;
+                this.isLoading = false;
+                this._updateStatusBadge('ready');
+                return true;
+            } catch (err) {
+                console.error(`[YOLO] Failed to load model "${profile.id}":`, err);
+                this.session = null;
+            }
         }
+
+        this.isLoading = false;
+        this._updateStatusBadge('error');
+        return false;
+    },
+
+    // Mô hình rác tải được nhưng chạy lỗi (thiếu bộ nhớ, thiếu toán tử...) -> chuyển hẳn sang mô hình COCO nhỏ.
+    async _fallbackToCoco(err) {
+        console.error('[YOLO] Mô hình rác chạy lỗi, chuyển sang YOLOv8n:', err);
+        this._forceCoco = true;
+        this.isReady = false;
+        this.session = null;
+        return this.init();
+    },
+
+    _applyProfile(p) {
+        this.profileId = p.id;
+        this.modelPath = p.modelPath;
+        this.inputSize = p.inputSize;
+        this.confidenceThreshold = p.confidenceThreshold;
+        this.classNames = p.classNames;
+        this.classNameVi = p.classNameVi;
+        this.ignoredClasses = p.ignoredClasses;
+        this._pre = null;          // canvas tiền xử lý phụ thuộc kích thước đầu vào
     },
 
     async detect(imageSource) {
@@ -107,7 +139,16 @@ const YoloDetector = {
         const inputName = this.session.inputNames[0];
         feeds[inputName] = tensor;
 
-        const results = await this.session.run(feeds);
+        let results;
+        try {
+            results = await this.session.run(feeds);
+        } catch (err) {
+            if (this.profileId === 'waste' && !this._forceCoco) {
+                if (await this._fallbackToCoco(err)) return this.detect(imageSource);
+            }
+            console.error('[YOLO] Lỗi chạy mô hình:', err);
+            return null;
+        }
         const outputName = this.session.outputNames[0];
         const output = results[outputName];
 
@@ -177,7 +218,13 @@ const YoloDetector = {
         if (!w || !h) return [];
 
         const { tensor, ratioX, ratioY, padX, padY } = this._preprocess(source);
-        const results = await this.session.run({ [this.session.inputNames[0]]: tensor });
+        let results;
+        try {
+            results = await this.session.run({ [this.session.inputNames[0]]: tensor });
+        } catch (err) {
+            if (this.profileId === 'waste' && !this._forceCoco) await this._fallbackToCoco(err);
+            return null;                  // khung này bỏ qua; khung sau dùng mô hình dự phòng
+        }
         const output = results[this.session.outputNames[0]];
         return this._postprocess(output, w, h, ratioX, ratioY, padX, padY);
     },
@@ -235,8 +282,9 @@ const YoloDetector = {
 
 
         const data = output.data;
-        const numClasses = this.classNames.length;
         const numDetections = output.dims[2];
+        // số lớp theo đầu ra thật của mô hình ([1, 4 + số lớp, số ô]); không vượt quá danh sách tên đã khai báo
+        const numClasses = Math.min(this.classNames.length, output.dims[1] - 4);
 
         const candidates = [];
 
@@ -451,4 +499,30 @@ const YoloDetector = {
     }
 };
 
+// ---- Hồ sơ mô hình ----
+YoloDetector._cocoProfile = {
+    id: 'coco',
+    modelPath: YoloDetector.modelPath,
+    inputSize: YoloDetector.inputSize,
+    confidenceThreshold: YoloDetector.confidenceThreshold,
+    classNames: YoloDetector.classNames,
+    classNameVi: YoloDetector.classNameVi,
+    ignoredClasses: YoloDetector.ignoredClasses
+};
+
+// Mô hình riêng cho rác (YOLOv8m huấn luyện 8 nhóm chất liệu, đã chuyển sang ONNX, trọng số fp16, vào 384x384).
+YoloDetector._wasteProfile = {
+    id: 'waste',
+    modelPath: 'models/waste_384_fp16.onnx',
+    inputSize: 384,
+    confidenceThreshold: 0.30,
+    classNames: ['cardboard', 'e-waste', 'glass', 'medical', 'metal', 'organic', 'paper', 'plastic'],
+    classNameVi: {
+        cardboard: 'Bìa carton', 'e-waste': 'Rác điện tử', glass: 'Thủy tinh', medical: 'Rác y tế',
+        metal: 'Kim loại', organic: 'Hữu cơ', paper: 'Giấy', plastic: 'Nhựa'
+    },
+    ignoredClasses: new Set()
+};
+
+YoloDetector.profileId = 'coco';
 window.yoloDetector = YoloDetector;

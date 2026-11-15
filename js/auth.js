@@ -1,11 +1,12 @@
-// auth.js — Tài khoản người dùng: tạo tài khoản, đăng nhập, lưu điểm + lịch sử theo từng tài khoản.
+// auth.js — Tài khoản người dùng: đăng ký, đăng nhập, điểm + lịch sử.
 //
-// LƯU Ý: app hiện là web tĩnh (không có máy chủ) nên dữ liệu được lưu trong localStorage của
-// TRÌNH DUYỆT: chỉ dùng được trên thiết bị/trình duyệt đã tạo tài khoản, xóa dữ liệu trình duyệt
-// là mất, và không thể khôi phục mật khẩu. Muốn dùng chung nhiều thiết bị cần thêm backend
-// (hàm persist/login/register bên dưới là nơi thay bằng lời gọi API).
+// CHẾ ĐỘ MÁY CHỦ (mặc định khi trang chạy trên Netlify có hàm /api): tài khoản, mật khẩu (băm scrypt phía máy chủ),
+// điểm và lịch sử nằm trên máy chủ, dùng được ở mọi thiết bị; phiên đăng nhập là cookie HttpOnly. Điểm do MÁY CHỦ cộng
+// (trình duyệt chỉ "xin cộng"), quên mật khẩu thì đặt lại bằng mã khôi phục.
 //
-// Mật khẩu KHÔNG lưu nguyên văn: băm PBKDF2-SHA-256 với muối ngẫu nhiên cho từng tài khoản.
+// CHẾ ĐỘ CŨ (dự phòng khi không gọi được máy chủ: offline hoặc chưa deploy hàm): tài khoản lưu trong localStorage
+// của trình duyệt, mật khẩu băm PBKDF2-SHA-256. Tài khoản cũ kiểu này sẽ TỰ ĐỘNG chuyển lên máy chủ ở lần đăng nhập
+// kế tiếp khi có mạng (điểm và lịch sử được mang theo, có giới hạn).
 (() => {
     'use strict';
 
@@ -19,6 +20,10 @@
     let guestMode = false;
     let mode = 'login';
     let busy = false;
+    let serverMode = false;          // đang đăng nhập bằng tài khoản trên máy chủ
+    let serverProfile = null;
+    let readyResolve;
+    const ready = new Promise((r) => { readyResolve = r; });   // khôi phục phiên (máy chủ) xong
 
     const $ = (id) => document.getElementById(id);
     // khóa có tiền tố '@' để tên như "__proto__" không ghi đè nguyên mẫu của object
@@ -104,7 +109,7 @@
     };
 
     // ---------- Nghiệp vụ tài khoản ----------
-    async function register({ username, displayName, password, password2 }) {
+    async function registerLocal({ username, displayName, password, password2 }) {
         username = normUsername(username);
         if (!USERNAME_RE.test(username)) return { ok: false, error: ERR.username };
         if (String(password || '').length < 6) return { ok: false, error: ERR.passwordShort };
@@ -135,7 +140,7 @@
         return { ok: true };
     }
 
-    async function login({ username, password }) {
+    async function loginLocal({ username, password }) {
         username = normUsername(username);
         if (!hasCrypto) return { ok: false, error: ERR.noCrypto };
 
@@ -156,22 +161,26 @@
     function startSession(acc) {
         currentUsername = acc.username;
         guestMode = false;
+        serverMode = false;
         setSession(acc.username);
         window.ecoState?.loadAccount(acc);
         refreshAccountUI();
-        scheduleSync(800);
     }
 
-    function logout() {
-        if (window.ecoState) persist(window.ecoState);
+    async function logout() {
+        if (serverMode) {
+            await api('POST', '/api/auth/logout', {}, 4000);
+        } else if (window.ecoState) {
+            persist(window.ecoState);
+        }
         clearSession();
         try { sessionStorage.setItem(FLAG_OPEN_AUTH, '1'); } catch (e) { /* bỏ qua */ }
         location.reload();      // về lại màn hình chào với trạng thái sạch
     }
 
-    // Ghi điểm + lịch sử của tài khoản đang đăng nhập (StateManager gọi sau mỗi lần cộng điểm).
+    // Ghi điểm + lịch sử của tài khoản đang đăng nhập (chế độ cũ). Ở chế độ máy chủ, điểm nằm trên máy chủ nên không cần.
     function persist(state) {
-        if (!currentUsername || !state) return;
+        if (serverMode || !currentUsername || !state) return;
         const accounts = readAccounts();
         const acc = accounts[keyOf(currentUsername)];
         if (!acc) return;
@@ -186,83 +195,159 @@
         }));
         acc.updatedAt = Date.now();
         writeAccounts(accounts);
-        if (acc.points !== lastSyncedPoints) scheduleSync();
     }
 
     const isSignedIn = () => !!currentUsername || guestMode;
 
-    // ---------- Bảng xếp hạng thật (máy chủ: /api/leaderboard) ----------
-    // Trình duyệt gửi điểm của chính tài khoản đang đăng nhập; token bí mật (sinh một lần, chỉ lưu băm ở máy chủ)
-    // đảm bảo người khác dùng trùng tên đăng nhập không ghi đè được điểm của bạn.
-    const LB_URL = '/api/leaderboard';
-    let syncTimer = null;
-    let lastSyncedPoints = null;
-    const idCache = {};
-
-    async function sha256Hex(str) {
-        const buf = await crypto.subtle.digest('SHA-256', encoder.encode(str));
-        return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
-    }
-
-    // Mã công khai của tài khoản trên bảng xếp hạng (không lộ tên đăng nhập); phải khớp hàm idOf() ở máy chủ.
-    async function getPublicId() {
-        if (!currentUsername || !hasCrypto) return '';
-        if (!idCache[currentUsername]) idCache[currentUsername] = (await sha256Hex('user:' + currentUsername)).slice(0, 16);
-        return idCache[currentUsername];
-    }
-
-    function ensureLbToken() {
-        const accounts = readAccounts();
-        const acc = accounts[keyOf(currentUsername)];
-        if (!acc) return '';
-        if (!/^[a-f0-9]{32}$/.test(acc.lbToken || '')) {
-            acc.lbToken = Array.from(crypto.getRandomValues(new Uint8Array(16))).map((b) => b.toString(16).padStart(2, '0')).join('');
-            writeAccounts(accounts);
-        }
-        return acc.lbToken;
-    }
-
-    function scheduleSync(delay = 1500) {
-        if (!currentUsername || !hasCrypto) return;
-        clearTimeout(syncTimer);
-        syncTimer = setTimeout(() => { syncScore(); }, delay);
-    }
-
-    async function syncScore(opts = {}) {
-        if (!currentUsername || !hasCrypto || !window.ecoState) return;
-        clearTimeout(syncTimer);
-        const points = Math.max(0, Math.floor(Number(window.ecoState.points) || 0));
+    // ---------- Máy chủ (/api/...) ----------
+    // Trả về { unavailable: true } khi không gọi được (offline, hàm chưa deploy, lỗi 5xx) -> dùng chế độ cũ.
+    async function api(method, path, body, timeoutMs = 10000) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
         try {
-            const token = ensureLbToken();
-            if (!token) return;
-            const res = await fetch(LB_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    username: currentUsername,
-                    displayName: window.ecoState.displayName(),
-                    points,
-                    token
-                }),
-                keepalive: !!opts.keepalive
+            const res = await fetch(path, {
+                method,
+                headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+                body: body !== undefined ? JSON.stringify(body) : undefined,
+                credentials: 'same-origin',
+                cache: 'no-store',
+                signal: ctrl.signal
             });
-            if (res.ok) {
-                lastSyncedPoints = points;
-                if (!opts.keepalive) window.ecoState.loadLeaderboard?.();
-            } else {
-                console.warn('[Auth] Không đồng bộ được điểm lên bảng xếp hạng:', res.status);
+            if (!(res.headers.get('content-type') || '').includes('json') || res.status === 404 || res.status >= 500) {
+                return { unavailable: true, status: res.status };
             }
+            const data = await res.json();
+            return { ok: res.ok, status: res.status, data };
         } catch (e) {
-            console.warn('[Auth] Đồng bộ bảng xếp hạng lỗi (offline?):', e);
+            return { unavailable: true, status: 0 };
+        } finally {
+            clearTimeout(timer);
         }
     }
 
-    // Dùng khi không gọi được máy chủ: các tài khoản thật đã tạo trên thiết bị/trình duyệt này.
+    const serverError = (r, fallback) => (r && r.data && r.data.error && r.data.error.message) || fallback;
+
+    function toast(msg) {
+        const d = document.createElement('div');
+        d.textContent = msg;
+        d.setAttribute('role', 'status');
+        d.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);max-width:88vw;padding:10px 16px;border-radius:12px;background:#166534;color:#fff;font-size:14px;font-weight:600;z-index:99999;box-shadow:0 6px 20px rgba(0,0,0,.25);text-align:center';
+        document.body.appendChild(d);
+        setTimeout(() => d.remove(), 3800);
+    }
+
+    function startServerSession(profile) {
+        currentUsername = profile.username;
+        guestMode = false;
+        serverMode = true;
+        serverProfile = profile;
+        clearSession();                       // bỏ phiên kiểu cũ trong trình duyệt
+        window.ecoState?.loadAccount(profile);
+        refreshAccountUI();
+    }
+
+    // Tài khoản cũ tạo trong trình duyệt (trước khi có máy chủ): kiểm tra mật khẩu cục bộ rồi chuyển lên máy chủ.
+    async function migrateLegacy(username, password) {
+        const accounts = readAccounts();
+        const acc = accounts[keyOf(username)];
+        if (!acc || !hasCrypto) return null;
+        const hash = await derive(String(password || ''), b64ToBytes(acc.salt), acc.iter || PBKDF2_ITER);
+        if (!safeEqual(hash, acc.hash)) return null;
+
+        const r = await api('POST', '/api/auth/register', {
+            username, displayName: acc.displayName, password,
+            migrate: { points: acc.points, history: acc.history }
+        });
+        if (r.unavailable) return loginLocal({ username, password });
+        if (!r.ok) return null;               // vd. tên này đã có trên máy chủ với mật khẩu khác -> coi như sai thông tin
+
+        delete accounts[keyOf(username)];     // dữ liệu giờ nằm trên máy chủ; xóa bản cục bộ (gồm cả mật khẩu băm)
+        writeAccounts(accounts);
+        startServerSession(r.data.profile);
+        return { ok: true, recoveryCode: r.data.recoveryCode };
+    }
+
+    async function register(form) {
+        const username = normUsername(form.username);
+        if (!USERNAME_RE.test(username)) return { ok: false, error: ERR.username };
+        if (String(form.password || '').length < 6) return { ok: false, error: ERR.passwordShort };
+        if (form.password !== form.password2) return { ok: false, error: ERR.passwordMismatch };
+
+        const r = await api('POST', '/api/auth/register', { username, displayName: form.displayName, password: form.password });
+        if (r.unavailable) return registerLocal(form);      // chưa có máy chủ / mất mạng: lưu tạm trên thiết bị
+        if (!r.ok) return { ok: false, error: serverError(r, ERR.exists) };
+        startServerSession(r.data.profile);
+        return { ok: true, recoveryCode: r.data.recoveryCode };
+    }
+
+    async function login(form) {
+        const username = normUsername(form.username);
+        const password = String(form.password || '');
+        const r = await api('POST', '/api/auth/login', { username, password });
+        if (r.unavailable) return loginLocal({ username, password });
+        if (r.ok) { startServerSession(r.data.profile); return { ok: true }; }
+        if (r.status === 401) {
+            const mig = await migrateLegacy(username, password);
+            if (mig) return mig;
+        }
+        return { ok: false, error: serverError(r, ERR.wrong) };
+    }
+
+    async function resetPassword(form) {
+        const username = normUsername(form.username);
+        if (!USERNAME_RE.test(username)) return { ok: false, error: ERR.username };
+        if (!String(form.recoveryCode || '').trim()) return { ok: false, error: 'Hãy nhập mã khôi phục.' };
+        if (String(form.password || '').length < 6) return { ok: false, error: ERR.passwordShort };
+        if (form.password !== form.password2) return { ok: false, error: ERR.passwordMismatch };
+
+        const r = await api('POST', '/api/auth/reset', { username, recoveryCode: form.recoveryCode, newPassword: form.password });
+        if (r.unavailable) return { ok: false, error: 'Cần có mạng để đặt lại mật khẩu. Hãy thử lại sau.' };
+        if (!r.ok) return { ok: false, error: serverError(r, ERR.wrong) };
+        startServerSession(r.data.profile);
+        return { ok: true, recoveryCode: r.data.recoveryCode };
+    }
+
+    // Lấy lại hồ sơ từ máy chủ (khôi phục phiên, hoặc đồng bộ lại sau khi máy chủ từ chối một lần cộng điểm).
+    async function refreshFromServer() {
+        const r = await api('GET', '/api/auth/me', undefined, 5000);
+        if (r.ok) { serverProfile = r.data.profile; window.ecoState?.loadAccount(r.data.profile); refreshAccountUI(); }
+        return r;
+    }
+
+    // Cộng điểm: các lần "xin cộng" được xếp hàng, cách nhau >= ~2 giây (máy chủ giới hạn tần suất).
+    let awardChain = Promise.resolve();
+    let lastAwardSent = 0;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    function award(amount, item) {
+        if (!serverMode) return Promise.resolve();
+        awardChain = awardChain.then(async () => {
+            const wait = 2100 - (Date.now() - lastAwardSent);
+            if (wait > 0) await sleep(wait);
+            lastAwardSent = Date.now();
+            const r = await api('POST', '/api/me/award', { amount, name: item?.name, tag: item?.tag, icon: item?.icon });
+
+            if (r.unavailable) return;                       // mất mạng: tải lại trang sẽ lấy điểm theo máy chủ
+            if (r.ok) { window.ecoState?.setServerPoints(r.data.points); return; }
+            if (r.status === 401) {
+                toast('Phiên đăng nhập đã hết hạn. Hãy đăng nhập lại.');
+                setTimeout(() => { try { sessionStorage.setItem(FLAG_OPEN_AUTH, '1'); } catch (e) { /* bỏ qua */ } location.reload(); }, 1800);
+                return;
+            }
+            // Máy chủ từ chối (đạt giới hạn ngày, thao tác quá nhanh...): đồng bộ lại để điểm/lịch sử khớp máy chủ
+            const code = r.data?.error?.status;
+            toast(code === 'DAILY_CAP' ? 'Bạn đã đạt giới hạn điểm của hôm nay.' : serverError(r, 'Không cộng được điểm lần này.'));
+            await refreshFromServer();
+        }).catch((e) => console.warn('[Auth] award lỗi:', e));
+        return awardChain;
+    }
+
+    // Dùng khi không gọi được máy chủ: các tài khoản có trên thiết bị/trình duyệt này.
     function localBoard() {
         const accounts = readAccounts();
         return Object.keys(accounts).map((k) => {
             const a = accounts[k];
-            return { id: 'local:' + a.username, name: a.displayName || a.username, points: Number(a.points) || 0, isCurrent: a.username === currentUsername };
+            return { id: 'local:' + a.username, name: a.displayName || a.username, points: Number(a.points) || 0, isCurrent: !serverMode && a.username === currentUsername };
         });
     }
 
@@ -276,11 +361,37 @@
         mode = m;
         document.querySelectorAll('.auth-tab').forEach((t) => t.classList.toggle('active', t.dataset.mode === m));
         document.querySelectorAll('.auth-register-only').forEach((el) => el.classList.toggle('hidden', m !== 'register'));
+        document.querySelectorAll('.auth-reset-only').forEach((el) => el.classList.toggle('hidden', m !== 'reset'));
+        document.querySelectorAll('.auth-login-only').forEach((el) => el.classList.toggle('hidden', m !== 'login'));
+        document.querySelectorAll('.auth-pw2-wrap').forEach((el) => el.classList.toggle('hidden', m === 'login'));
         const submit = $('auth-submit');
-        if (submit) submit.textContent = m === 'login' ? 'Đăng nhập' : 'Tạo tài khoản';
+        if (submit) submit.textContent = m === 'login' ? 'Đăng nhập' : m === 'register' ? 'Tạo tài khoản' : 'Đặt lại mật khẩu';
+        const pwLabel = $('auth-password-label');
+        if (pwLabel) pwLabel.textContent = m === 'reset' ? 'Mật khẩu mới' : 'Mật khẩu';
         const pw = $('auth-password');
         if (pw) pw.autocomplete = m === 'login' ? 'current-password' : 'new-password';
         setError('');
+    }
+
+    // Hiện mã khôi phục (chỉ hiện một lần) rồi mới vào ứng dụng
+    function showRecovery(code) {
+        $('auth-recovery-code').textContent = code;
+        $('auth-form')?.classList.add('hidden');
+        document.querySelector('.auth-tabs')?.classList.add('hidden');
+        document.querySelector('.auth-secondary')?.classList.add('hidden');
+        document.querySelector('.auth-forgot')?.classList.add('hidden');
+        $('auth-recovery-box')?.classList.remove('hidden');
+        $('welcome-screen')?.classList.add('auth-open');
+        $('auth-panel')?.classList.remove('hidden');
+    }
+
+    function hideRecovery() {
+        $('auth-recovery-box')?.classList.add('hidden');
+        $('auth-recovery-code').textContent = '';
+        $('auth-form')?.classList.remove('hidden');
+        document.querySelector('.auth-tabs')?.classList.remove('hidden');
+        document.querySelector('.auth-secondary')?.classList.remove('hidden');
+        setMode('login');
     }
 
     function showPanel(m = 'login') {
@@ -314,7 +425,7 @@
         const metaEl = $('account-meta');
         if (metaEl) {
             if (currentUsername) {
-                const acc = readAccounts()[keyOf(currentUsername)];
+                const acc = serverMode ? serverProfile : readAccounts()[keyOf(currentUsername)];
                 const since = acc?.createdAt ? new Date(acc.createdAt).toLocaleDateString('vi-VN') : '';
                 metaEl.textContent = `@${currentUsername}` + (since ? ` · Tạo ngày ${since}` : '');
             } else {
@@ -344,12 +455,16 @@
                     username: $('auth-username')?.value,
                     displayName: $('auth-display')?.value,
                     password: $('auth-password')?.value,
-                    password2: $('auth-password2')?.value
+                    password2: $('auth-password2')?.value,
+                    recoveryCode: $('auth-recovery')?.value
                 };
-                const res = mode === 'login' ? await login(data) : await register(data);
+                const res = mode === 'login' ? await login(data)
+                    : mode === 'register' ? await register(data)
+                        : await resetPassword(data);
                 if (!res.ok) { setError(res.error); return; }
 
                 $('auth-form').reset();
+                if (res.recoveryCode) { showRecovery(res.recoveryCode); return; }   // tài khoản mới / đặt lại mật khẩu: cho người dùng lưu mã
                 hidePanel();
                 window.enterApp?.();
             } catch (err) {
@@ -369,6 +484,17 @@
         });
 
         $('auth-back-btn')?.addEventListener('click', hidePanel);
+        $('auth-forgot-btn')?.addEventListener('click', () => { setMode('reset'); $('auth-recovery')?.focus(); });
+        $('auth-recovery-copy')?.addEventListener('click', async () => {
+            const code = $('auth-recovery-code')?.textContent || '';
+            try { await navigator.clipboard.writeText(code); toast('Đã sao chép mã khôi phục.'); }
+            catch (e) { toast('Không sao chép được, hãy ghi lại mã này.'); }
+        });
+        $('auth-recovery-done')?.addEventListener('click', () => {
+            hideRecovery();
+            hidePanel();
+            window.enterApp?.();
+        });
         $('welcome-switch-account')?.addEventListener('click', logout);
 
         $('logout-btn')?.addEventListener('click', () => {
@@ -381,11 +507,7 @@
             }
         });
 
-        window.addEventListener('pagehide', () => {
-            if (!window.ecoState) return;
-            persist(window.ecoState);
-            if (currentUsername && Math.floor(Number(window.ecoState.points) || 0) !== lastSyncedPoints) syncScore({ keepalive: true });
-        });
+        window.addEventListener('pagehide', () => { if (window.ecoState) persist(window.ecoState); });
     }
 
     function init() {
@@ -398,7 +520,6 @@
             if (acc) {
                 currentUsername = acc.username;
                 window.ecoState?.loadAccount(acc);
-                scheduleSync(800);
             } else {
                 clearSession();
             }
@@ -411,6 +532,14 @@
             sessionStorage.removeItem(FLAG_OPEN_AUTH);
         } catch (e) { /* bỏ qua */ }
         if (openAuth && !currentUsername) showPanel('login');
+
+        // Phiên đăng nhập trên máy chủ (cookie) -> lấy hồ sơ về; máy chủ không có/không gọi được thì giữ chế độ cũ
+        api('GET', '/api/auth/me', undefined, 4000).then((r) => {
+            if (r.ok) {
+                startServerSession(r.data.profile);
+                if (!$('auth-recovery-box') || $('auth-recovery-box').classList.contains('hidden')) hidePanel();
+            }
+        }).finally(readyResolve);
     }
 
     if (document.readyState === 'loading') {
@@ -426,9 +555,11 @@
         persist,
         isSignedIn,
         showPanel,
-        getPublicId,
-        syncScore,
         localBoard,
+        award,
+        resetPassword,
+        isServerMode: () => serverMode,
+        ready,
         get currentUser() { return currentUsername; }
     };
 })();

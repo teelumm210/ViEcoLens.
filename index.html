@@ -65,16 +65,21 @@
                         <input type="text" id="auth-username" autocomplete="username" autocapitalize="none"
                             spellcheck="false" maxlength="20" placeholder="vd: lam.nguyen">
                     </label>
+                    <label class="auth-field auth-reset-only hidden">
+                        <span>Mã khôi phục</span>
+                        <input type="text" id="auth-recovery" autocomplete="off" autocapitalize="characters"
+                            spellcheck="false" maxlength="24" placeholder="XXXX-XXXX-XXXX-XXXX">
+                    </label>
                     <label class="auth-field auth-register-only hidden">
                         <span>Tên hiển thị</span>
                         <input type="text" id="auth-display" autocomplete="nickname" maxlength="24"
                             placeholder="vd: Lâm">
                     </label>
                     <label class="auth-field">
-                        <span>Mật khẩu</span>
+                        <span id="auth-password-label">Mật khẩu</span>
                         <input type="password" id="auth-password" autocomplete="current-password" placeholder="Ít nhất 6 ký tự">
                     </label>
-                    <label class="auth-field auth-register-only hidden">
+                    <label class="auth-field auth-pw2-wrap hidden">
                         <span>Nhập lại mật khẩu</span>
                         <input type="password" id="auth-password2" autocomplete="new-password">
                     </label>
@@ -88,6 +93,17 @@
                 <div class="auth-secondary">
                     <button type="button" class="auth-link-btn" id="auth-guest-btn">Dùng thử không cần tài khoản</button>
                     <button type="button" class="auth-link-btn" id="auth-back-btn">&larr; Quay lại</button>
+                </div>
+                <div class="auth-forgot auth-login-only">
+                    <button type="button" class="auth-link-btn" id="auth-forgot-btn">Quên mật khẩu?</button>
+                </div>
+
+                <div class="auth-recovery hidden" id="auth-recovery-box">
+                    <p class="auth-recovery-title">Lưu mã khôi phục của bạn</p>
+                    <p class="auth-note">Mã này giúp bạn đặt lại mật khẩu nếu quên. Mã chỉ hiện một lần, hãy chụp màn hình hoặc ghi lại ở nơi an toàn.</p>
+                    <div class="auth-recovery-code" id="auth-recovery-code"></div>
+                    <button type="button" class="auth-link-btn" id="auth-recovery-copy">Sao chép mã</button>
+                    <button type="button" class="auth-submit" id="auth-recovery-done">Tôi đã lưu mã, tiếp tục</button>
                 </div>
             </div>
 

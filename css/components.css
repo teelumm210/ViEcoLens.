@@ -1721,6 +1721,39 @@
     text-decoration: underline;
 }
 
+.auth-forgot {
+    text-align: center;
+    margin-top: 10px;
+}
+
+.auth-recovery-title {
+    font-size: 16px;
+    font-weight: 800;
+    color: var(--primary-dark);
+    margin: 0 0 8px;
+}
+
+.auth-recovery-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+    text-align: center;
+    color: var(--primary-dark);
+    background: var(--primary-light);
+    border: 2px dashed var(--primary);
+    border-radius: 14px;
+    padding: 14px 8px;
+    margin: 0 0 8px;
+    user-select: all;
+    word-break: break-all;
+}
+
+.auth-recovery .auth-link-btn {
+    display: block;
+    margin: 0 auto 12px;
+}
+
 .account-card {
     display: flex;
     align-items: center;

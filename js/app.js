@@ -17,7 +17,9 @@ document.addEventListener('DOMContentLoaded', () => {
     window.enterApp = enterApp;
 
     if (startBtn && welcomeScreen) {
-        startBtn.addEventListener('click', () => {
+        startBtn.addEventListener('click', async () => {
+            // Chờ kiểm tra phiên đăng nhập trên máy chủ (rất nhanh) để không hiện form đăng nhập oan
+            try { await window.ecoAuth?.ready; } catch (e) { /* bỏ qua */ }
             // Chưa đăng nhập (và chưa chọn dùng thử) -> hiện form đăng nhập / tạo tài khoản
             if (window.ecoAuth && !window.ecoAuth.isSignedIn()) {
                 window.ecoAuth.showPanel();

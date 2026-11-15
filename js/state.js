@@ -60,7 +60,16 @@ const StateManager = {
             this.prependToHistory(itemData, amount);
             this.updateChart();
         }
-        window.ecoAuth?.persist(this);
+        window.ecoAuth?.persist(this);      // chế độ cũ: lưu vào trình duyệt
+        window.ecoAuth?.award(amount, itemData);   // chế độ máy chủ: xin máy chủ cộng điểm (máy chủ là nơi quyết định)
+    },
+
+    // Điểm chính thức do máy chủ trả về (thay cho số cộng tạm thời trên màn hình)
+    setServerPoints(points) {
+        const p = Math.max(0, Math.floor(Number(points) || 0));
+        if (p === this.points) return;
+        this.points = p;
+        this.updateAllUI();
     },
  
     updateAllUI() {
@@ -321,31 +330,27 @@ const StateManager = {
     // Nếu không gọi được máy chủ: dùng các tài khoản thật có trong trình duyệt này.
     lbUsers: [],
     lbMe: null,
-    lbMyId: '',
     lbSource: 'none',
     _lbSeq: 0,
 
     async loadLeaderboard() {
         const seq = ++this._lbSeq;
         const auth = window.ecoAuth;
-        let myId = '';
-        try { myId = auth?.currentUser ? await auth.getPublicId() : ''; } catch (e) { myId = ''; }
 
         try {
-            const res = await fetch('/api/leaderboard' + (myId ? `?id=${myId}` : ''), { cache: 'no-store' });
+            // cookie phiên (cùng nguồn) cho máy chủ biết "bạn là ai" để đánh dấu dòng của bạn và tính hạng thật
+            const res = await fetch('/api/leaderboard', { cache: 'no-store', credentials: 'same-origin' });
             if (!res.ok || !(res.headers.get('content-type') || '').includes('json')) throw new Error('HTTP ' + res.status);
             const data = await res.json();
             if (seq !== this._lbSeq) return;
             this.lbUsers = Array.isArray(data.leaderboard) ? data.leaderboard : [];
             this.lbMe = data.me || null;
-            this.lbMyId = myId;
             this.lbSource = 'server';
         } catch (e) {
             if (seq !== this._lbSeq) return;
             console.warn('Không tải được bảng xếp hạng từ máy chủ, dùng tài khoản có trên thiết bị này:', e);
             this.lbUsers = auth?.localBoard ? auth.localBoard() : [];
             this.lbMe = null;
-            this.lbMyId = '';
             this.lbSource = 'local';
         }
         this.renderLeaderboard();
@@ -357,12 +362,13 @@ const StateManager = {
 
         // Đánh dấu "Bạn" và dùng điểm hiện tại của bạn (mới hơn dữ liệu máy chủ)
         let users = (this.lbUsers || []).map((u) => {
-            const isCurrent = signedIn && (u.isCurrent || (this.lbMyId && u.id === this.lbMyId));
+            const isCurrent = signedIn && (u.isCurrent || u.isMe);
             return isCurrent ? { ...u, points: this.points, isCurrent: true } : { ...u };
         });
         // Bạn chưa có trong danh sách (hạng ngoài top, hoặc chưa kịp đồng bộ) -> thêm vào để vẫn thấy hạng của mình
-        if (signedIn && !users.some((u) => u.isCurrent) && (this.lbSource !== 'server' || this.lbMyId)) {
-            users.push({ id: 'me', name: this.displayName(), points: this.points, isCurrent: true });
+        if (signedIn && !users.some((u) => u.isCurrent)) {
+            if (this.lbSource === 'local') users.push({ id: 'me', name: this.displayName(), points: this.points, isCurrent: true });
+            else if (this.lbMe) users.push({ id: this.lbMe.id, name: this.lbMe.name, points: this.points, isCurrent: true });
         }
         const sorted = users.sort((a, b) => b.points - a.points);
 
